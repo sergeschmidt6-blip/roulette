@@ -3,7 +3,7 @@ import pandas as pd
 import random
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale - 72 Joueurs", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale - 72 Joueurs Pro", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES = ["RRR", "RRN", "RNR", "RNN", "NNN", "NNR", "NRN", "NRR"]
 
@@ -63,20 +63,13 @@ class JoueurGlissant:
             self.retard_constate = self.solde_virtuel < norme
             self.compteur_carton = 0
 
-# --- INITIALISATION DE L'ARMÉE DES 72 JOUEURS ---
-if "armee" not in st.session_state:
-    armee = {"RN": [], "PI": [], "PM": []}
-    id_j = 1
-    for chance in ["RN", "PI", "PM"]:
-        for dec in [0, 1, 2]:
-            for fig in FIGURES:
-                armee[chance].append(JoueurGlissant(id_j, chance, fig, dec))
-                id_j += 1
-    st.session_state.armee = armee
+# --- INITIALISATION ---
+if "historique" not in st.session_state:
     st.session_state.historique = []
+if "capital_reel" not in st.session_state:
     st.session_state.capital_reel = 0.0
 
-# --- TRADUCTEUR DE NUMÉROS RÉELS ---
+# --- TRADUCTEUR DE NUMÉROS ---
 def analyser_numero(num):
     if num == 0: 
         return "0", "0", "0"
@@ -87,30 +80,53 @@ def analyser_numero(num):
     return rn, pi, pm
 
 # --- INTERFACE GRAPHIQUE ---
-st.title("🎰 La Marche Triomphale — Assistant Multi-Chances (72 Joueurs)")
-st.write("Suivi en temps réel des balances différentielles et mémoire continue.")
+st.title("🎰 La Marche Triomphale — Analyseur Long Terme (72 Joueurs)")
+st.write("Moteur de calcul à mémoire continue pour l'étude des grands retours à l'équilibre.")
 
 # --- BARRE LATÉRALE (SIDEBAR) ---
-st.sidebar.header("⚙️ OPTIONS & SIMULATION")
+st.sidebar.header("⚙️ CONTRÔLE DE SESSION")
 st.sidebar.metric(label="💰 CAISSE RÉELLE (Unités)", value=f"{st.session_state.capital_reel} p.")
 
-# Bouton Générateur de Nombres Aléatoires
-st.sidebar.subheader("🎲 Générateur Automatique")
-if st.sidebar.button("⚡ Injecter +100 coups aléatoires", use_container_width=True):
-    for _ in range(100):
-        # Génère un nombre entre 0 et 36 (37 possibilités équitables)
-        nouveau_num = random.randint(0, 36)
-        st.session_state.historique.append(nouveau_num)
+# Zone d'importation de secours (Saisie en bloc)
+st.sidebar.subheader("🗃️ Importation / Secours")
+import_txt = st.sidebar.text_area("Coller une série de numéros (séparés par des virgules) :", placeholder="Ex: 14,32,0,5,22,19")
+if st.sidebar.button("📥 Importer la série", use_container_width=True):
+    if import_txt:
+        try:
+            # Nettoyage et conversion du texte en liste de nombres
+            nettoye = import_txt.replace("\n", "").replace(" ", "")
+            liste_numeros = [int(x) for x in nettoye.split(",") if x != ""]
+            # Validation des numéros de roulette
+            if all(0 <= n <= 36 for n in liste_numeros):
+                st.session_state.historique.extend(liste_numeros)
+                st.sidebar.success(f"✅ +{len(liste_numeros)} numéros ajoutés !")
+                st.rerun()
+            else:
+                st.sidebar.error("❌ Les numéros doivent être compris entre 0 et 36.")
+        except ValueError:
+            st.sidebar.error("❌ Format incorrect. Utilisez uniquement des chiffres et des virgules.")
+
+st.sidebar.write("---")
+
+# Générateur automatique pour les tests de masse
+st.sidebar.subheader("🎲 Générateur de Masse")
+nb_sim = st.sidebar.number_input("Nombre de coups à injecter :", min_value=10, max_value=10000, value=100, step=100)
+if st.sidebar.button(f"⚡ Injecter +{nb_sim} coups", use_container_width=True):
+    st.session_state.historique.extend([random.randint(0, 36) for _ in range(nb_sim)])
     st.rerun()
 
 st.sidebar.write("---")
-# Réinitialisation déplacée dans la barre pour plus de clarté
-if st.sidebar.button("🔄 Réinitialiser la permanence", use_container_width=True):
-    st.session_state.clear()
-    st.rerun()
 
-# Clavier de Saisie Universel
-st.subheader("📥 Enregistrer manuellement un numéro")
+# Remise à zéro sécurisée
+st.sidebar.subheader("🚨 Zone de Danger")
+confirm_reset = st.sidebar.checkbox("⚠️ Activer le bouton de remise à zéro")
+if confirm_reset:
+    if st.sidebar.button("🔴 EFFACER TOUTE LA PERMANENCE", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+
+# --- CLAVIER DE SAISIE MANUELLE ---
+st.subheader("📥 Enregistrer un numéro (Sortie en direct)")
 cols_clavier = st.columns(13)
 with cols_clavier[0]:
     if st.button("🟢 0", use_container_width=True):
@@ -126,52 +142,52 @@ for n in range(1, 37):
             st.session_state.historique.append(n)
             st.rerun()
 
-# --- MOTEUR DE CALCULS ---
-votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
-
-# Réinitialisation pour reconstruction
+# --- RECONSTRUCTION DE L'ARMÉE DES 72 JOUEURS ET DES MISES ---
+# Initialisation d'une armée locale fraîche pour retraiter fidèlement l'intégralité historique
+armee_locale = {"RN": [], "PI": [], "PM": []}
+id_j = 1
 for chance in ["RN", "PI", "PM"]:
-    for j in st.session_state.armee[chance]:
-        j.index_etape = 0
-        j.statut = "JOUER"
-        j.retard_constate = False
-        j.solde_virtuel = 0
-        j.compteur_carton = 0
-        j.cartons_passes = 0
-        if j.id <= 8 or (j.id >= 25 and j.id <= 32) or (j.id >= 49 and j.id <= 56): j.dec = 0
-        elif j.id <= 16 or (j.id >= 33 and j.id <= 40) or (j.id >= 57 and j.id <= 64): j.dec = 1
-        else: j.dec = 2
+    for dec in [0, 1, 2]:
+        for fig in FIGURES:
+            armee_locale[chance].append(JoueurGlissant(id_j, chance, fig, dec))
+            id_j += 1
 
-capital_calculé = 0.0
+votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
+capital_calcule = 0.0
 
-for idx, num in enumerate(st.session_state.historique):
+# Boucle ultra-rapide de retraitement historique
+for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
     
+    # 1. Calcul des intentions AVANT ce tirage pour déterminer l'impact financier réel
     mises_du_coup = {}
-    for chance, codes in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
-        v_r = sum(1 for j in st.session_state.armee[chance] if j.intention() == "R")
-        v_n = sum(1 for j in st.session_state.armee[chance] if j.intention() == "N")
+    for chance in ["RN", "PI", "PM"]:
+        v_r = sum(1 for j in armee_locale[chance] if j.intention() == "R")
+        v_n = sum(1 for j in armee_locale[chance] if j.intention() == "N")
         mises_du_coup[chance] = v_r - v_n
 
+    # 2. Application financière du tirage
     for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
         mise_engagee = mises_du_coup[chance]
         if mise_engagee != 0:
             if est_zero:
-                capital_calculé -= abs(mise_engagee) * 0.5
+                capital_calcule -= abs(mise_engagee) * 0.5
             elif (mise_engagee > 0 and tirage_code == code_r) or (mise_engagee < 0 and tirage_code == code_n):
-                capital_calculé += abs(mise_engagee)
+                capital_calcule += abs(mise_engagee)
             else:
-                capital_calculé -= abs(mise_engagee)
+                capital_calcule -= abs(mise_engagee)
 
-    for j in st.session_state.armee["RN"]: j.actualiser(rn, est_zero)
-    for j in st.session_state.armee["PI"]: j.actualiser(pi, est_zero)
-    for j in st.session_state.armee["PM"]: j.actualiser(pm, est_zero)
+    # 3. Actualisation des positions des joueurs
+    for j in armee_locale["RN"]: j.actualiser(rn, est_zero)
+    for j in armee_locale["PI"]: j.actualiser(pi, est_zero)
+    for j in armee_locale["PM"]: j.actualiser(pm, est_zero)
 
-st.session_state.capital_reel = capital_calculé
+st.session_state.capital_reel = capital_calcule
 
+# Collecte des intentions pour la boule QUI VA SORTIR (Le Prochain Coup)
 for chance in ["RN", "PI", "PM"]:
-    for j in st.session_state.armee[chance]:
+    for j in armee_locale[chance]:
         intent = j.intention()
         if intent: votes[chance][intent] += 1
 
@@ -189,7 +205,7 @@ def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
             st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
         else:
             st.markdown("### ⏸️ **NE RIEN MISER**")
-        st.caption(f"Forces : {v_r} ({label_r}) | {v_n} ({label_n})")
+        st.caption(f"Forces en présence : {v_r} ({label_r}) | {v_n} ({label_n})")
 
 with c1: generer_bloc_mise("Rouge / Noir", votes["RN"]["R"], votes["RN"]["N"], "ROUGE 🔴", "NOIR ⚫")
 with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], "PAIR 🔢", "IMPAIR 🔀")
@@ -197,8 +213,12 @@ with c3: generer_bloc_mise("Passe / Manque", votes["PM"]["R"], votes["PM"]["N"],
 
 # --- VISUALISATION DE LA PERMANENCE COURANTE ---
 st.write("---")
-st.subheader(f"📇 Permanence en cours ({len(st.session_state.historique)} boules enregistrées)")
+st.subheader(f"📇 Permanence globale ({len(st.session_state.historique)} boules enregistrées)")
 if st.session_state.historique:
-    st.info(", ".join([str(x) for x in st.session_state.historique]))
+    # Affichage intelligent des 150 derniers numéros pour ne pas saturer l'écran graphique
+    if len(st.session_state.historique) > 150:
+        st.info(f"... [Affichage des 150 derniers coups] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
+    else:
+        st.info(", ".join([str(x) for x in st.session_state.historique]))
 else:
-    st.write("*Le tableau est vide. Utilisez le bouton de simulation à gauche ou cliquez sur les numéros.*")
+    st.write("*Le tableau de permanence est vide.*")
