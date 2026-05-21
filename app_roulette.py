@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Mémoire Éternelle", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Sessions Strictes 24", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES = ["RRR", "RRN", "RNR", "RNN", "NNN", "NNR", "NRN", "NRR"]
 
@@ -54,6 +54,8 @@ class JoueurGlissant:
         self.cartons_passes = 0
 
     def intention(self):
+        # Un joueur ne peut formuler d'intention que si son décalage est purgé,
+        # s'il n'est pas en statut ARRET, et si son droit de mise a été validé au bilan des 24
         if self.dec > 0 or self.statut == "ARRET" or not self.retard_constate:
             return None
         return self.fig[self.index_etape]
@@ -65,11 +67,14 @@ class JoueurGlissant:
 
         gain = 0
         if est_zero:
-            if self.statut == "JOUER": gain = -0.5
+            if self.statut == "JOUER" and self.retard_constate: 
+                gain = -0.5
         else:
             self.compteur_carton += 1
             attendu = self.fig[self.index_etape]
-            if self.statut == "JOUER":
+            
+            # On n'applique l'arrêt et l'avancée de la figure réelle que s'il est qualifié pour jouer
+            if self.retard_constate and self.statut == "JOUER":
                 if tirage_epure == attendu:
                     gain = 1
                     self.index_etape += 1
@@ -78,21 +83,36 @@ class JoueurGlissant:
                     self.statut = "ARRET"
                     self.index_etape += 1
             else:
+                # Progression passive si non qualifié ou en arrêt temporaire
                 self.index_etape += 1
 
         self.solde_virtuel += gain
 
+        # Fin d'une figure de 3 coups
         if not est_zero and self.index_etape >= 3:
             self.index_etape = 0
+            # Si le joueur était arrêté, il ne reprend son droit "JOUER" que pour la figure suivante, 
+            # à condition d'être dans sa session d'attaque autorisée
             self.statut = "JOUER"
 
-        if not est_zero and self.compteur_carton == 24:
-            self.cartons_passes += 1
-            norme = self.cartons_passes * 3
-            self.retard_constate = self.solde_virtuel < norme
-            self.compteur_carton = 0
+    def faire_le_bilan_des_24(self):
+        """Fonction appelée STRICTEMENT tous les 24 coups épurés pour figer les autorisations de mise."""
+        if self.dec > 0:
+            self.retard_constate = False
+            return
+            
+        self.cartons_passes += 1
+        norme = self.cartons_passes * 3
+        
+        # Validation du ticket de jeu pour les 24 prochains coups
+        self.retard_constate = self.solde_virtuel < norme
+        self.compteur_carton = 0
+        
+        # À l'ouverture d'un nouveau carton, on réinitialise l'arrêt pour redonner sa chance au joueur qualifié
+        self.statut = "JOUER"
+        self.index_etape = 0
 
-# --- CHARGEMENT ---
+# --- CHARGEMENT INITIAL ---
 if "historique" not in st.session_state:
     st.session_state.historique = charger_permanence_cloud()
 if "capital_reel" not in st.session_state:
@@ -170,67 +190,106 @@ for chance in ["RN", "PI", "PM"]:
 
 capital_calcule = 0.0
 
-# Traitement pas à pas
+# Compteurs globaux pour scander les tranches de 24 par chance simple
+compteurs_globaux_24 = {"RN": 0, "PI": 0, "PM": 0}
+
 for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
     
-    # A. Relever les intentions AVANT que le numéro ne soit appliqué
+    # 1. Relever les intentions réelles AVANT l'impact
     mises_du_coup = {}
     for chance in ["RN", "PI", "PM"]:
         v_r = sum(1 for j in armee_locale[chance] if j.intention() == "R")
         v_n = sum(1 for j in armee_locale[chance] if j.intention() == "N")
-        mises_du_coup[chance] = v_r - v_n # Balance nette
+        mises_du_coup[chance] = v_r - v_n
 
-    # B. Calculer l'impact financier immédiat du numéro sur la table
+    # 2. Impact financier réel
     for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
         net_mised = mises_du_coup[chance]
         if net_mised != 0:
             if est_zero:
-                # Règle de partage de la roulette : demi-perte de la masse engagée net
                 capital_calcule -= abs(net_mised) * 0.5
             elif (net_mised > 0 and tirage_code == code_r) or (net_mised < 0 and tirage_code == code_n):
                 capital_calcule += abs(net_mised)
             else:
                 capital_calcule -= abs(net_mised)
 
-    # C. Maintenant seulement, faire progresser les joueurs internes
+    # 3. Progression des joueurs
     for j in armee_locale["RN"]: j.actualiser(rn, est_zero)
     for j in armee_locale["PI"]: j.actualiser(pi, est_zero)
     for j in armee_locale["PM"]: j.actualiser(pm, est_zero)
 
-st.session_state.capital_reel = capital_calcule
-capital_placeholder.metric(label="💰 CAISSE RÉELLE (Unités)", value=f"{st.session_state.capital_reel} p.")
+    # 4. Gestion des Clôtures de Cartons de 24 (Uniquement sur les boules épurées)
+    if not est_zero:
+        for chance in ["RN", "PI", "PM"]:
+            compteurs_globaux_24[chance] += 1
+            if compteurs_globaux_24[chance] == 24:
+                # C'est la fin du bloc de 24 pour cette chance, on lance le grand bilan de qualification
+                for j in armee_locale[chance]:
+                    j.faire_le_bilan_des_24()
+                compteurs_globaux_24[chance] = 0
 
-# Collecte des votes pour le PROCHAIN coup (Futur)
+st.session_state.capital_reel = capital_calcule
+
+# Calcul du statut de la session en cours pour affichage
+total_boules = len(st.session_state.historique)
+zeros_purgés = sum(1 for x in st.session_state.historique if x == 0)
+boules_epurees = total_boules - zeros_purgés
+coup_dans_carton_actuel = boules_epurees % 24
+
+# Collecte des intentions pour le prochain coup
 votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 for chance in ["RN", "PI", "PM"]:
     for j in armee_locale[chance]:
         intent = j.intention()
         if intent: votes[chance][intent] += 1
 
+# Injection dynamique dans l'indicateur de la barre latérale
+capital_placeholder.markdown(
+    f"""
+    ### 💰 **{st.session_state.capital_reel} p.**
+    * Boules : **{total_boules}**
+    * Épurées : **{boules_epurees}**
+    * Avancement : **{coup_dans_carton_actuel}/24**
+    """
+)
+
 # --- AFFICHAGE DES ORDRES ---
 st.header("🎯 ORDRES DE MISES POUR LE PROCHAIN COUP")
+
+# Petit indicateur visuel pour savoir si on est en phase d'observation ou d'attaque
+if boules_epurees < 24:
+    st.info(f"⏳ **Phase d'observation initiale :** Encore {24 - boules_epurees} boules épurées nécessaires avant d'activer le premier bloc d'attaque.")
+else:
+    st.success(f"⚔️ **Session d'attaque en cours :** Coup n°{coup_dans_carton_actuel + 1} du carton actuel.")
+
 c1, c2, c3 = st.columns(3)
 
 def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
     bal = v_r - v_n
     with st.container(border=True):
         st.subheader(titre)
-        if bal > 0: st.markdown(f"### 🟢 **{label_r} : {bal} p.**")
-        elif bal < 0: st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
-        else: st.markdown("### ⏸️ **NE RIEN MISER**")
-        st.caption(f"Forces actives : {v_r} | {v_n}")
+        if boules_epurees < 24:
+            st.markdown("### ⏳ **OBSERVATION**")
+        elif bal > 0: 
+            st.markdown(f"### 🟢 **{label_r} : {bal} p.**")
+        elif bal < 0: 
+            st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
+        else: 
+            st.markdown("### ⏸️ **NE RIEN MISER**")
+        st.caption(f"Forces qualifiées prêtes : {v_r} | {v_n}")
 
 with c1: generer_bloc_mise("Rouge / Noir", votes["RN"]["R"], votes["RN"]["N"], "ROUGE 🔴", "NOIR ⚫")
 with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], "PAIR 🔢", "IMPAIR 🔀")
 with c3: generer_bloc_mise("Passe / Manque", votes["PM"]["R"], votes["PM"]["N"], "PASSE ⬆️", "MANQUE ⬇️")
 
 st.write("---")
-st.subheader(f"📇 Permanence sauvegardée ({len(st.session_state.historique)} boules)")
+st.subheader(f"📇 Permanence sauvegardée ({total_boules} boules)")
 if st.session_state.historique:
     if len(st.session_state.historique) > 150:
         st.info(f"... [Fichier long - 150 dernières boules affichées] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
     else:
         st.info(", ".join([str(x) for x in st.session_state.historique]))
-else: st.write("*Aucune donnée enregistrée sur le cloud.*")
+else:
+    st.write("*Aucune donnée enregistrée sur le cloud.*")
