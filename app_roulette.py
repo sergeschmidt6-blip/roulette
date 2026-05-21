@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Vagues Individualisées", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Cartons Étanches", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES = ["RRR", "RRN", "RNR", "RNN", "NNN", "NNR", "NRN", "NRR"]
 
@@ -45,17 +45,15 @@ class JoueurGlissant:
         self.id = id_j
         self.chance_type = chance_type 
         self.fig = fig
-        self.dec_initial = dec  # Sauvegarde du décalage d'origine
-        self.dec_courant = dec  # Compteur de décalage qui va s'épuiser
+        self.dec_initial = dec  
+        self.dec_courant = dec  
         self.index_etape = 0
         self.statut = "JOUER"
         self.retard_constate = False
-        self.solde_virtuel = 0
-        self.compteur_carton = 0
-        self.cartons_passes = 0
+        self.solde_du_carton = 0  # Comptabilité STRICTE sur les 24 coups en cours
+        self.compteur_coups_carton = 0
 
     def intention(self):
-        # Pas d'intention si le décalage initial n'est pas purgé ou si non qualifié
         if self.dec_courant > 0 or self.statut == "ARRET" or not self.retard_constate:
             return None
         return self.fig[self.index_etape]
@@ -71,7 +69,7 @@ class JoueurGlissant:
             if self.statut == "JOUER" and self.retard_constate: 
                 gain = -0.5
         else:
-            self.compteur_carton += 1
+            self.compteur_coups_carton += 1
             attendu = self.fig[self.index_etape]
             
             if self.retard_constate and self.statut == "JOUER":
@@ -85,19 +83,24 @@ class JoueurGlissant:
             else:
                 self.index_etape += 1
 
-        self.solde_virtuel += gain
+        self.solde_du_carton += gain
 
         # Fin d'une figure de 3 coups
         if not est_zero and self.index_etape >= 3:
             self.index_etape = 0
             self.statut = "JOUER"
 
-        # Chaque joueur gère son propre compteur de 24 de manière autonome
-        if not est_zero and self.compteur_carton == 24:
-            self.cartons_passes += 1
-            norme = self.cartons_passes * 3
-            self.retard_constate = self.solde_virtuel < norme
-            self.compteur_carton = 0
+        # CLÔTURE DU CARTON INDIVIDUEL (Au bout de 24 coups épurés subis par ce joueur)
+        if not est_zero and self.compteur_coups_carton == 24:
+            # La norme théorique attendue pour UN SEUL CARTON de 24 coups épurés est de +3 unités
+            norme_du_carton = 3
+            
+            # Le joueur se qualifie pour le PROCHAIN carton uniquement s'il a fait moins que la norme lors de ce carton
+            self.retard_constate = self.solde_du_carton < norme_du_carton
+            
+            # RESET complet des compteurs du joueur pour repartir à zéro sur le carton suivant
+            self.solde_du_carton = 0
+            self.compteur_coups_carton = 0
             self.statut = "JOUER"
             self.index_etape = 0
 
@@ -219,7 +222,7 @@ for chance in ["RN", "PI", "PM"]:
         intent = j.intention()
         if intent: votes[chance][intent] += 1
 
-# Statistiques d'activité globale pour le diagnostic visuel
+# Statistiques de qualification
 qualifies_rn = sum(1 for j in armee_locale["RN"] if j.retard_constate)
 qualifies_pi = sum(1 for j in armee_locale["PI"] if j.retard_constate)
 qualifies_pm = sum(1 for j in armee_locale["PM"] if j.retard_constate)
