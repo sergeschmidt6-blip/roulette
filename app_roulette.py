@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import random
@@ -11,51 +10,36 @@ st.set_page_config(page_title="Marche Triomphale — Mémoire Éternelle", layou
 
 FIGURES = ["RRR", "RRN", "RNR", "RNN", "NNN", "NNR", "NRN", "NRR"]
 
-# --- CONNEXION CLOUD GITHUB (SAUVEGARDE PERMANENTE) ---
+# --- CONNEXION CLOUD GITHUB ---
 TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 REPO = st.secrets.get("GITHUB_REPO", "")
 FILE_PATH = "permanence.txt"
 URL_API = f"https://api.github.com/repos/{REPO}/contents/{FILE_PATH}"
 
 def charger_permanence_cloud():
-    """Charge la permanence sauvegardée sur GitHub. Si le fichier n'existe pas, renvoie une liste vide."""
-    if not TOKEN or not REPO:
-        return []
+    if not TOKEN or not REPO: return []
     headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
     response = requests.get(URL_API, headers=headers)
     if response.status_code == 200:
         donnees = response.json()
         contenu_base64 = donnees["content"]
         contenu_texte = base64.b64decode(contenu_base64).decode("utf-8")
-        if contenu_texte.strip() == "":
-            return []
+        if contenido_texte.strip() == "": return []
         return [int(x) for x in contenu_texte.strip().split(",") if x != ""]
     return []
 
 def sauvegarder_permanence_cloud(nouvelle_liste):
-    """Écrit la permanence sur GitHub pour qu'elle soit conservée à vie."""
-    if not TOKEN or not REPO:
-        return
+    if not TOKEN or not REPO: return
     headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
     contenu_texte = ",".join([str(x) for x in nouvelle_liste])
     contenu_base64 = base64.b64encode(contenu_texte.encode("utf-8")).decode("utf-8")
-    
-    # Étape nécessaire : récupérer le "sha" du fichier s'il existe déjà pour pouvoir l'écraser
     response_get = requests.get(URL_API, headers=headers)
-    sha = None
-    if response_get.status_code == 200:
-        sha = response_get.json()["sha"]
-        
-    data = {
-        "message": "Mise à jour automatique de la permanence",
-        "content": contenu_base64
-    }
-    if sha:
-        data["sha"] = sha
-        
+    sha = response_get.json()["sha"] if response_get.status_code == 200 else None
+    data = {"message": "Mise à jour permanence", "content": contenu_base64}
+    if sha: data["sha"] = sha
     requests.put(URL_API, headers=headers, data=json.dumps(data))
 
-# --- STRUCTURE DU JOUEUR VIRTUEL ---
+# --- STRUCT DU JOUEUR ---
 class JoueurGlissant:
     def __init__(self, id_j, chance_type, fig, dec):
         self.id = id_j
@@ -76,18 +60,15 @@ class JoueurGlissant:
 
     def actualiser(self, tirage_epure, est_zero):
         if self.dec > 0:
-            if not est_zero:
-                self.dec -= 1
+            if not est_zero: self.dec -= 1
             return
 
         gain = 0
         if est_zero:
-            if self.statut == "JOUER":
-                gain = -0.5
+            if self.statut == "JOUER": gain = -0.5
         else:
             self.compteur_carton += 1
             attendu = self.fig[self.index_etape]
-            
             if self.statut == "JOUER":
                 if tirage_epure == attendu:
                     gain = 1
@@ -111,7 +92,7 @@ class JoueurGlissant:
             self.retard_constate = self.solde_virtuel < norme
             self.compteur_carton = 0
 
-# --- CHARGEMENT INITIAL DES DONNÉES SÉCURISÉES ---
+# --- CHARGEMENT ---
 if "historique" not in st.session_state:
     st.session_state.historique = charger_permanence_cloud()
 if "capital_reel" not in st.session_state:
@@ -125,20 +106,12 @@ def analyser_numero(num):
     pm = "R" if num >= 19 else "N"
     return rn, pi, pm
 
-# --- INTERFACE GRAPHIQUE ---
-st.title("🎰 Marche Triomphale Pro — Serveur Connecté")
-if TOKEN == "" or REPO == "":
-    st.warning("⚠️ Mode local actif : branchez vos Secrets Streamlit pour activer la sauvegarde éternelle.")
-else:
-    st.success("☁️ Base de données en ligne connectée avec succès. Vos données sont en sécurité.")
-
-# --- BARRE LATÉRALE (SIDEBAR) ---
+# --- SIDEBAR ---
 st.sidebar.header("⚙️ CONTRÔLE DE SESSION")
-st.sidebar.metric(label="💰 CAISSE RÉELLE (Unités)", value=f"{st.session_state.capital_reel} p.")
+capital_placeholder = st.sidebar.empty()
 
-# Importation / Secours
 st.sidebar.subheader("🗃️ Importation Externe")
-import_txt = st.sidebar.text_area("Coller une série (séparée par des virgules) :", placeholder="Ex: 14,32,0,5")
+import_txt = st.sidebar.text_area("Coller une série :", placeholder="Ex: 14,32,0,5")
 if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=True):
     if import_txt:
         try:
@@ -148,29 +121,17 @@ if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=T
                 st.session_state.historique.extend(liste_numeros)
                 sauvegarder_permanence_cloud(st.session_state.historique)
                 st.rerun()
-        except ValueError:
-            st.sidebar.error("Format incorrect.")
+        except ValueError: st.sidebar.error("Format incorrect.")
 
 st.sidebar.write("---")
-
-# Générateur Automatique (Simulateur de Chaos)
-st.sidebar.subheader("🎲 Simulateur de table")
+st.sidebar.subheader("🎲 Simulateur")
 nb_sim = st.sidebar.number_input("Nombre de coups :", min_value=10, max_value=2000, value=100, step=100)
-if st.sidebar.button(f"⚡ Injecter +{nb_sim} coups chaotiques", use_container_width=True):
-    # Utilisation d'un modèle avec de légères ruptures pour éviter l'annulation parfaite immédiate
-    nouveaux = []
-    for _ in range(nb_sim):
-        if random.random() < 0.05: # Injection de biais de séries temporaires
-            nouveaux.append(random.choice([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]))
-        else:
-            nouveaux.append(random.randint(0, 36))
-    st.session_state.historique.extend(nouveaux)
+if st.sidebar.button(f"⚡ Injecter +{nb_sim} coups", use_container_width=True):
+    st.session_state.historique.extend([random.randint(0, 36) for _ in range(nb_sim)])
     sauvegarder_permanence_cloud(st.session_state.historique)
     st.rerun()
 
 st.sidebar.write("---")
-
-# Remise à zéro sécurisée cloud
 st.sidebar.subheader("🚨 Zone de Danger")
 confirm_reset = st.sidebar.checkbox("⚠️ Déverrouiller le bouton")
 if confirm_reset:
@@ -179,7 +140,7 @@ if confirm_reset:
         sauvegarder_permanence_cloud([])
         st.rerun()
 
-# --- CLAVIER EN DIRECT ---
+# --- CLAVIER ---
 st.subheader("📥 Enregistrer un numéro sorti au Casino")
 cols_clavier = st.columns(13)
 with cols_clavier[0]:
@@ -198,7 +159,7 @@ for n in range(1, 37):
             sauvegarder_permanence_cloud(st.session_state.historique)
             st.rerun()
 
-# --- RECONSTRUCTION DU MOTEUR (72 JOUEURS) ---
+# --- RECONSTRUCTION CHRONOLOGIQUE STRICTE ---
 armee_locale = {"RN": [], "PI": [], "PM": []}
 id_j = 1
 for chance in ["RN", "PI", "PM"]:
@@ -207,35 +168,42 @@ for chance in ["RN", "PI", "PM"]:
             armee_locale[chance].append(JoueurGlissant(id_j, chance, fig, dec))
             id_j += 1
 
-votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 capital_calcule = 0.0
 
+# Traitement pas à pas
 for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
     
+    # A. Relever les intentions AVANT que le numéro ne soit appliqué
     mises_du_coup = {}
     for chance in ["RN", "PI", "PM"]:
         v_r = sum(1 for j in armee_locale[chance] if j.intention() == "R")
         v_n = sum(1 for j in armee_locale[chance] if j.intention() == "N")
-        mises_du_coup[chance] = v_r - v_n
+        mises_du_coup[chance] = v_r - v_n # Balance nette
 
+    # B. Calculer l'impact financier immédiat du numéro sur la table
     for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
-        mise_engagee = mises_du_coup[chance]
-        if mise_engagee != 0:
+        net_mised = mises_du_coup[chance]
+        if net_mised != 0:
             if est_zero:
-                capital_calcule -= abs(mise_engagee) * 0.5
-            elif (mise_engagee > 0 and tirage_code == code_r) or (mise_engagee < 0 and tirage_code == code_n):
-                capital_calcule += abs(mise_engagee)
+                # Règle de partage de la roulette : demi-perte de la masse engagée net
+                capital_calcule -= abs(net_mised) * 0.5
+            elif (net_mised > 0 and tirage_code == code_r) or (net_mised < 0 and tirage_code == code_n):
+                capital_calcule += abs(net_mised)
             else:
-                capital_calcule -= abs(mise_engagee)
+                capital_calcule -= abs(net_mised)
 
+    # C. Maintenant seulement, faire progresser les joueurs internes
     for j in armee_locale["RN"]: j.actualiser(rn, est_zero)
     for j in armee_locale["PI"]: j.actualiser(pi, est_zero)
     for j in armee_locale["PM"]: j.actualiser(pm, est_zero)
 
 st.session_state.capital_reel = capital_calcule
+capital_placeholder.metric(label="💰 CAISSE RÉELLE (Unités)", value=f"{st.session_state.capital_reel} p.")
 
+# Collecte des votes pour le PROCHAIN coup (Futur)
+votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 for chance in ["RN", "PI", "PM"]:
     for j in armee_locale[chance]:
         intent = j.intention()
@@ -252,7 +220,7 @@ def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
         if bal > 0: st.markdown(f"### 🟢 **{label_r} : {bal} p.**")
         elif bal < 0: st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
         else: st.markdown("### ⏸️ **NE RIEN MISER**")
-        st.caption(f"Forces : {v_r} | {v_n}")
+        st.caption(f"Forces actives : {v_r} | {v_n}")
 
 with c1: generer_bloc_mise("Rouge / Noir", votes["RN"]["R"], votes["RN"]["N"], "ROUGE 🔴", "NOIR ⚫")
 with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], "PAIR 🔢", "IMPAIR 🔀")
@@ -265,5 +233,4 @@ if st.session_state.historique:
         st.info(f"... [Fichier long - 150 dernières boules affichées] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
     else:
         st.info(", ".join([str(x) for x in st.session_state.historique]))
-else:
-    st.write("*Aucune donnée enregistrée sur le cloud.*")
+else: st.write("*Aucune donnée enregistrée sur le cloud.*")
