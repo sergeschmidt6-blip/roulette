@@ -24,7 +24,7 @@ def charger_permanence_cloud():
         donnees = response.json()
         contenu_base64 = donnees["content"]
         contenu_texte = base64.b64decode(contenu_base64).decode("utf-8")
-        if contenido_texte.strip() == "": return []
+        if contenu_texte.strip() == "": return []
         return [int(x) for x in contenu_texte.strip().split(",") if x != ""]
     return []
 
