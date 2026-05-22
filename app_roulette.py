@@ -279,6 +279,32 @@ with c1: generer_bloc_mise("Rouge / Noir", votes["RN"]["R"], votes["RN"]["N"], "
 with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], "PAIR 🔢", "IMPAIR 🔀")
 with c3: generer_bloc_mise("Passe / Manque", votes["PM"]["R"], votes["PM"]["N"], "PASSE ⬆️", "MANQUE ⬇️")
 
+# ==============================================================================
+# --- AJOUT ICI : OUTIL D'AUDIT ET DE VÉRIFICATION DES JOUEURS ---
+# ==============================================================================
+st.write("---")
+with st.expander("🔍 INSPECTEUR DE L'ARMÉE VIRTUELLE (Outil de Vérification)"):
+    choix_chance = st.radio("Sélectionnez la chance à auditer :", ["RN", "PI", "PM"], horizontal=True)
+    
+    donnees_audit = []
+    for j in armee_locale[choix_chance]:
+        donnees_audit.append({
+            "ID Joueur": j.id,
+            "Figure Cible": j.fig,
+            "Décalage Config": j.dec_initial,
+            "Décalage Restant": j.dec_courant,
+            "Index Étape (0-2)": j.index_etape,
+            "Statut Actuel": j.statut,
+            "QUALIFIÉ (Retard)": "✅ OUI" if j.retard_constate else "❌ NON",
+            "Solde Carton Actuel": f"{j.solde_du_carton} u.",
+            "Coups Joués dans Carton": f"{j.compteur_coups_carton} / 24",
+            "Intention Prochaine": j.intention() if j.intention() else "🚫 Aucune"
+        })
+    
+    df_audit = pd.DataFrame(donnees_audit)
+    st.dataframe(df_audit, use_container_width=True, hide_index=True)
+# ==============================================================================
+
 st.write("---")
 st.subheader(f"📇 Permanence sauvegardée ({total_boules} boules)")
 if st.session_state.historique:
