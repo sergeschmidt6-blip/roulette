@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Blocs Étanche", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Restauration", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES_GENERIQUES = ["ooo", "oox", "oxo", "oxx", "xxx", "xxo", "xox", "xoo"]
 
@@ -17,24 +17,36 @@ FILE_PATH = "permanence.txt"
 URL_API = f"https://api.github.com/repos/{REPO}/contents/{FILE_PATH}"
 
 def charger_permanence_cloud():
-    if not TOKEN or not REPO: return []
-    headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    response = requests.get(URL_API, headers=headers)
-    if response.status_code == 200:
-        donnees = response.json()
-        return [int(x) for x in base64.b64decode(donnees["content"]).decode("utf-8").strip().split(",") if x != ""]
+    if not TOKEN or not REPO: 
+        return []
+    try:
+        headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
+        response = requests.get(URL_API, headers=headers)
+        if response.status_code == 200:
+            donnees = response.json()
+            contenu_texte = base64.b64decode(donnees["content"]).decode("utf-8")
+            # Nettoyage strict des sauts de ligne et espaces
+            contenu_nettoye = contenu_texte.replace("\n", "").replace(" ", "").strip()
+            if not contenu_nettoye: 
+                return []
+            return [int(x) for x in contenu_nettoye.split(",") if x != ""]
+    except Exception as e:
+        st.sidebar.error(f"Erreur de lecture Cloud : {e}")
     return []
 
 def sauvegarder_permanence_cloud(nouvelle_liste):
     if not TOKEN or not REPO: return
-    headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
-    contenu_texte = ",".join([str(x) for x in nouvelle_liste])
-    contenu_base64 = base64.b64encode(contenu_texte.encode("utf-8")).decode("utf-8")
-    response_get = requests.get(URL_API, headers=headers)
-    sha = response_get.json()["sha"] if response_get.status_code == 200 else None
-    data = {"message": "Mise à jour permanence", "content": contenu_base64}
-    if sha: data["sha"] = sha
-    requests.put(URL_API, headers=headers, data=json.dumps(data))
+    try:
+        headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
+        contenu_texte = ",".join([str(x) for x in nouvelle_liste])
+        contenu_base64 = base64.b64encode(contenu_texte.encode("utf-8")).decode("utf-8")
+        response_get = requests.get(URL_API, headers=headers)
+        sha = response_get.json()["sha"] if response_get.status_code == 200 else None
+        data = {"message": "Mise à jour permanence", "content": contenu_base64}
+        if sha: data["sha"] = sha
+        requests.put(URL_API, headers=headers, data=json.dumps(data))
+    except Exception as e:
+        st.sidebar.error(f"Erreur d'écriture Cloud : {e}")
 
 # --- STRUCTURE DU JOUEUR (BLOCS DE 3 FERMÉS) ---
 class JoueurMT:
@@ -52,7 +64,6 @@ class JoueurMT:
         self.solde_global = 0  
         self.survenues_carton_actuel = 0  
         
-        # Tampon séquentiel pour collecter le bloc de 3 coups en cours
         self.tampon_bloc_3 = []
         self.resultat_coup_precedent = None
 
@@ -98,16 +109,13 @@ class JoueurMT:
         fig_traduite = self.obtenir_traduction_figure()
         type_coup = self.determiner_type_coup(coup_absolu)
         
-        # Accumulation exclusive dans le bloc de 3 coups en cours
         self.tampon_bloc_3.append(tirage_epure)
         
-        # À la fin de chaque bloc de 3 coups (Coups 3, 6, 9, 12, 15, 18, 21, 24)
         if len(self.tampon_bloc_3) == 3:
             if "".join(self.tampon_bloc_3) == fig_traduite:
                 self.survenues_carton_actuel += 1
-            self.tampon_bloc_3 = [] # On vide le tampon pour le bloc suivant (étanchéité totale)
+            self.tampon_bloc_3 = [] 
 
-        # Suivi des résultats de mises
         intent = self.intention(coup_absolu)
         if intent:
             if tirage_epure == intent: self.resultat_coup_precedent = "GAGNÉ"
@@ -118,7 +126,6 @@ class JoueurMT:
         if type_coup == 3:
             self.resultat_coup_precedent = None
 
-        # CLÔTURE DU CARTON DE 24 COUPS
         if self.compteur_coups_carton == 24:
             if self.survenues_carton_actuel == 0:
                 evolution = -1
@@ -130,13 +137,12 @@ class JoueurMT:
             self.solde_global += evolution
             self.retard_constate = (self.solde_global < 0)
             
-            # Réinitialisation complète pour le carton suivant
             self.compteur_coups_carton = 0
             self.survenues_carton_actuel = 0
             self.dec_courant = self.dec_initial  
             self.resultat_coup_precedent = None
 
-# --- INITIALISATION & TRAITEMENT ---
+# --- CONTRÔLE DE L'ÉTAT (SESSION STATE) ---
 if "historique" not in st.session_state:
     st.session_state.historique = charger_permanence_cloud()
 if "capital_reel" not in st.session_state:
@@ -150,9 +156,14 @@ def analyser_numero(num):
     pm = "R" if num >= 19 else "N"    
     return rn, pi, pm
 
-# --- SIDEBAR & CLAVIER ---
+# --- SIDEBAR & SIMULATEUR ---
 st.sidebar.header("⚙️ CONTRÔLE DE SESSION")
 capital_placeholder = st.sidebar.empty()
+
+# Bouton de synchronisation manuelle au cas où
+if st.sidebar.button("🔄 Forcer la relecture du serveur", use_container_width=True):
+    st.session_state.historique = charger_permanence_cloud()
+    st.rerun()
 
 import_txt = st.sidebar.text_area("Coller une série :", placeholder="Ex: 14,32,0,5")
 if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=True):
@@ -176,6 +187,7 @@ if confirm_reset and st.sidebar.button("🔴 SUPPRIMER TOUT DU SERVEUR", use_con
     sauvegarder_permanence_cloud([])
     st.rerun()
 
+# --- CLAVIER DE SAISIE ---
 st.subheader("📥 Enregistrer un numéro sorti au Casino")
 cols_clavier = st.columns(13)
 with cols_clavier[0]:
@@ -207,6 +219,7 @@ capital_calcule = 0.0
 total_boules_global = len(st.session_state.historique)
 coup_absolu_epure = 0
 
+# Moulinette de reconstruction
 for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
@@ -306,3 +319,10 @@ with st.expander("🔍 INSPECTEUR CHIRURGICAL DES COMPTES (Vérification du Sold
             "Action Prochaine": intention_visuelle
         })
     st.dataframe(pd.DataFrame(donnees_audit), use_container_width=True, hide_index=True)
+
+st.write("---")
+st.subheader(f"📇 Permanence enregistrée ({total_boules_global} boules)")
+if st.session_state.historique:
+    if len(st.session_state.historique) > 150:
+        st.info(f"... [Permanence] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
+    else: st.info(", ".join([str(x) for x in st.session_state.historique]))
