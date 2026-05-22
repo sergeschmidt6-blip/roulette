@@ -263,6 +263,10 @@ c1, c2, c3 = st.columns(3)
 
 def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
     bal = v_r - v_n
+    # Extraction de la lettre propre (ex: "ROUGE" au lieu de "ROUGE 🔴")
+    lettre_r = label_r.split()[0]
+    lettre_n = label_n.split()[0]
+    
     with st.container(border=True):
         st.subheader(titre)
         if boules_epurees < 26:
@@ -273,7 +277,9 @@ def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
             st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
         else: 
             st.markdown("### ⏸️ **NE RIEN MISER**")
-        st.caption(f"Votes instantanés : {v_r} R vs {v_n} N")
+        
+        # Affichage dynamique et propre selon la chance simple
+        st.caption(f"Votes instantanés : {v_r} {lettre_r} vs {v_n} {lettre_n}")
 
 with c1: generer_bloc_mise("Rouge / Noir", votes["RN"]["R"], votes["RN"]["N"], "ROUGE 🔴", "NOIR ⚫")
 with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], "PAIR 🔢", "IMPAIR 🔀")
