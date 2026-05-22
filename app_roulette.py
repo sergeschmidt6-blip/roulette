@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Logique de Blocs Fixes", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Pointage Manuel", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES_GENERIQUES = ["ooo", "oox", "oxo", "oxx", "xxx", "xxo", "xox", "xoo"]
 
@@ -39,7 +39,7 @@ def sauvegarder_permanence_cloud(nouvelle_liste):
     if sha: data["sha"] = sha
     requests.put(URL_API, headers=headers, data=json.dumps(data))
 
-# --- STRUCTURE DU JOUEUR (LOGIQUE DE BLOCS EXACTE) ---
+# --- STRUCTURE DU JOUEUR (LOGIQUE DE POINTAGE COMPTABLE) ---
 class JoueurMT:
     def __init__(self, id_j, chance_type, fig_generique, dec):
         self.id = id_j
@@ -48,19 +48,16 @@ class JoueurMT:
         self.dec_initial = dec  
         self.dec_courant = dec  
         
-        # Statuts de qualification
+        # Statuts de qualification et suivi du carton
         self.retard_constate = False 
         self.compteur_coups_carton = 0
         
-        # Historique global pour le calcul de l'écart / retard
-        self.apparitions_totales = 0
-        self.total_opportunites = 0
+        # LE TABLEAU DE POINTAGE HUMAIN (Entiers uniquement)
+        self.solde_global = 0  # Votre solde cumulé du début de tableau
+        self.survenues_carton_actuel = 0  # Compteur de survenues STRICTEMENT DANS LES 24 COUPS
         
-        # Fenêtre glissante locale pour identifier la formation de la figure
+        # Fenêtre glissante pour détecter la formation de la figure de 3 lettres
         self.memoire_glissante = []
-        
-        # Mémoire du résultat du coup précédent au sein du bloc de 3 coups courant
-        # Peut être : "GAGNÉ", "PERDU", None
         self.resultat_coup_precedent = None
 
     def obtenir_traduction_figure(self):
@@ -73,92 +70,77 @@ class JoueurMT:
         return "".join([dico[lettre] for lettre in self.fig_generique])
 
     def determiner_type_coup(self, coup_absolu):
-        # Repérage de la position du coup (1 à 24) dans la structure des 8 blocs fixes
         pos = ((coup_absolu - 1) % 24) + 1
-        if pos in [1, 4, 7, 10, 13, 16, 19, 22]:
-            return 1
-        elif pos in [2, 5, 8, 11, 14, 17, 20, 23]:
-            return 2
-        else:
-            return 3
+        if pos in [1, 4, 7, 10, 13, 16, 19, 22]: return 1
+        elif pos in [2, 5, 8, 11, 14, 17, 20, 23]: return 2
+        else: return 3
 
     def intention(self, coup_absolu):
-        # Si le décalage initial du joueur n'est pas purgé ou s'il n'est pas qualifié, pas de mise
         if self.dec_courant > 0 or not self.retard_constate:
             return None
             
         type_coup = self.determiner_type_coup(coup_absolu)
         fig_traduite = self.obtenir_traduction_figure()
-        idx_lettre = (coup_absolu - 1) % 3  # Index de la lettre (0, 1 ou 2) dans la figure de 3
+        idx_lettre = (coup_absolu - 1) % 3
         
-        # Application stricte de vos 3 règles de mise
         if type_coup == 1:
-            # Règle 1 : Les coups 1, 4, 7... sont toujours joués
             return fig_traduite[idx_lettre]
-            
         elif type_coup == 2:
-            # Règle 2 : Ne sont joués que si le précédent (Coup 1) était gagné
-            if self.resultat_coup_precedent == "GAGNÉ":
-                return fig_traduite[idx_lettre]
+            if self.resultat_coup_precedent == "GAGNÉ": return fig_traduite[idx_lettre]
             return None
-            
         elif type_coup == 3:
-            # Règle 3 : Le 3ème coup n'est joué que si le 2ème était gagné
-            if self.resultat_coup_precedent == "GAGNÉ":
-                return fig_traduite[idx_lettre]
+            if self.resultat_coup_precedent == "GAGNÉ": return fig_traduite[idx_lettre]
             return None
 
     def actualiser(self, tirage_epure, est_zero, coup_absolu):
         if self.dec_courant > 0:
-            if not est_zero: 
-                self.dec_courant -= 1
+            if not est_zero: self.dec_courant -= 1
             return
 
-        if est_zero:
-            return # Le zéro suspend l'analyse mais ne casse pas la structure du bloc épuré
+        if est_zero: return
 
         self.compteur_coups_carton += 1
         fig_traduite = self.obtenir_traduction_figure()
         type_coup = self.determiner_type_coup(coup_absolu)
         
-        # 1. Analyse glissante de la permanence (Comptabilité de l'historique global)
+        # 1. Analyse et comptage des survenues STRICTEMENT à l'intérieur du carton
         self.memoire_glissante.append(tirage_epure)
         if len(self.memoire_glissante) > 3:
             self.memoire_glissante.pop(0)
             
         if len(self.memoire_glissante) == 3:
-            self.total_opportunites += 1
             if "".join(self.memoire_glissante) == fig_traduite:
-                self.apparitions_totales += 1
+                self.survenues_carton_actuel += 1
 
-        # 2. Enregistrement du résultat pour le coup en cours (Sert de mémoire pour le coup suivant du bloc)
+        # 2. Gestion de la mémoire des sous-coups (Règles 1, 2, 3)
         intent = self.intention(coup_absolu)
         if intent:
-            if tirage_epure == intent:
-                self.resultat_coup_precedent = "GAGNÉ"
-            else:
-                self.resultat_coup_precedent = "PERDU"
+            if tirage_epure == intent: self.resultat_coup_precedent = "GAGNÉ"
+            else: self.resultat_coup_precedent = "PERDU"
         else:
-            # Si le coup n'a pas été joué (Saut), la mémoire devient None ou PERDU pour bloquer le coup 3
             self.resultat_coup_precedent = "NON_JOUÉ"
 
-        # 3. Fin de bloc de 3 coups : réinitialisation de la mémoire du coup précédent
         if type_coup == 3:
             self.resultat_coup_precedent = None
 
-        # 4. FIN DU CARTON DE 24 COUPS ÉPURÉS : RECALCUL DES RETARDS SUR LA BASE DU SOLDE GLOBAL
+        # 3. CLÔTURE DU CARTON (Au bout de 24 coups épurés) -> APPLICATION DE VOTRE GRILLE
         if self.compteur_coups_carton == 24:
-            # Calcul de la norme théorique globale depuis le début
-            # Dans une suite de n opportunités, chaque figure doit statistiquement apparaître (Opportunités / 8)
-            if self.total_opportunites > 0:
-                norme_theorique_globale = self.total_opportunites / 8.0
-                # Le groupe est qualifié en RETARD si ses apparitions réelles sont inférieures à la norme
-                self.retard_constate = self.apparitions_totales < norme_theorique_globale
+            if self.survenues_carton_actuel == 0:
+                evolution = -1
+            elif self.survenues_carton_actuel == 1:
+                evolution = 0  # Signe "=" (statu quo)
             else:
-                self.retard_constate = False
+                evolution = self.survenues_carton_actuel - 1  # 2 donne +1, 3 donne +2...
+
+            # Addition au solde global du début de tableau
+            self.solde_global += evolution
+
+            # Détection du retard : si le solde global est sous l'équilibre (négatif), on joue !
+            self.retard_constate = (self.solde_global < 0)
             
-            # Reset des indicateurs du carton (Le décalage se réactive pour trier la synchronisation des vagues)
+            # Reset pour le carton suivant
             self.compteur_coups_carton = 0
+            self.survenues_carton_actuel = 0
             self.dec_courant = self.dec_initial  
             self.resultat_coup_precedent = None
 
@@ -210,8 +192,8 @@ if confirm_reset:
         sauvegarder_permanence_cloud([])
         st.rerun()
 
-# --- CLAVIER DE SAISIE MANUELLE ---
-st.subheader("📥 Enregistrer un numéro sorti au Casino")
+# --- CLAVIER DE SAISIE ---
+st.subheader("📥 Enregistrer un numéro")
 cols_clavier = st.columns(13)
 with cols_clavier[0]:
     if st.button("🟢 0", use_container_width=True):
@@ -240,8 +222,6 @@ for chance in ["RN", "PI", "PM"]:
 
 capital_calcule = 0.0
 total_boules_global = len(st.session_state.historique)
-
-# Compteur de coups absolu épuré (sans les zéros) pour caler les blocs de 1 à 24
 coup_absolu_epure = 0
 
 # --- RECONSTRUCTION CHRONOLOGIQUE STRICTE ---
@@ -274,11 +254,10 @@ for num in st.session_state.historique:
 
 st.session_state.capital_reel = capital_calcule
 
-# Préparation du coup suivant (le coup à jouer à la table)
 prochain_coup_absolu = coup_absolu_epure + 1
 position_dans_carton = ((prochain_coup_absolu - 1) % 24) + 1
 
-# Calcul des votes pour le prochain coup à venir
+# Calcul des votes
 votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 for chance in ["RN", "PI", "PM"]:
     for j in armee_locale[chance]:
@@ -289,8 +268,7 @@ qualifies_rn = sum(1 for j in armee_locale["RN"] if j.retard_constate)
 qualifies_pi = sum(1 for j in armee_locale["PI"] if j.retard_constate)
 qualifies_pm = sum(1 for j in armee_locale["PM"] if j.retard_constate)
 
-# Affichage des métriques de session
-zeros_purgés = sum(1 for x in st.session_state.historique if x == 0)
+# Métriques
 capital_placeholder.markdown(
     f"""
     ### 💰 **{st.session_state.capital_reel} p.**
@@ -299,20 +277,20 @@ capital_placeholder.markdown(
     * ---
     * Position Carton : **{position_dans_carton} / 24**
     * ---
-    * Groupes Qualifiés (Retard Global) :
+    * Groupes en Retard (Solde < 0) :
       * R/N : **{qualifies_rn}/24**
       * P/I : **{qualifies_pi}/24**
       * P/M : **{qualifies_pm}/24**
     """
 )
 
-# --- PANEL DES ORDRES DE JEU ---
+# --- ORDRES DE MISES ---
 st.header("🎯 ORDRES DE MISES POUR LE PROCHAIN COUP")
 
 if coup_absolu_epure < 26:
-    st.info("⏳ **Phase d'Observation...** Attente de la première synchronisation complète des vagues (26 boules requises).")
+    st.info("⏳ **Observation...** En attente de la première clôture de carton.")
 else:
-    st.success(f"⚔️ **Session active.** Analyse du coup épuré n°{prochain_coup_absolu} (Position fixe : Étape {((prochain_coup_absolu-1)%3)+1} du bloc).")
+    st.success(f"⚔️ **Analyse du coup épuré n°{prochain_coup_absolu}** (Étape {((prochain_coup_absolu-1)%3)+1} du bloc).")
 
 c1, c2, c3 = st.columns(3)
 
@@ -323,30 +301,22 @@ def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
     
     with st.container(border=True):
         st.subheader(titre)
-        if coup_absolu_epure < 26:
-            st.markdown("### ⏳ **OBSERVATION**")
-        elif bal > 0: 
-            st.markdown(f"### 🟢 **{label_r} : {bal} p.**")
-        elif bal < 0: 
-            st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
-        else: 
-            st.markdown("### ⏸️ **NE RIEN MISER**")
-        st.caption(f"Votes instantanés : {v_r} {lettre_r} vs {v_n} {lettre_n}")
+        if coup_absolu_epure < 26: st.markdown("### ⏳ **OBSERVATION**")
+        elif bal > 0: st.markdown(f"### 🟢 **{label_r} : {bal} p.**")
+        elif bal < 0: st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
+        else: st.markdown("### ⏸️ **NE RIEN MISER**")
+        st.caption(f"Votes : {v_r} {lettre_r} vs {v_n} {lettre_n}")
 
 with c1: generer_bloc_mise("Rouge / Noir", votes["RN"]["R"], votes["RN"]["N"], "ROUGE 🔴", "NOIR ⚫")
 with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], "PAIR 🔢", "IMPAIR 🔀")
 with c3: generer_bloc_mise("Passe / Manque", votes["PM"]["R"], votes["PM"]["N"], "PASSE ⬆️", "MANQUE ⬇️")
 
-# --- EXPANDER : INSPECTEUR ET VÉRIFICATION ---
+# --- INSPECTEUR COMPTABLE ---
 st.write("---")
-with st.expander("🔍 INSPECTEUR CHIRURGICAL DE L'ARMÉE (Vérification des Blocs Fixes)"):
+with st.expander("🔍 INSPECTEUR CHIRURGICAL DES COMPTES (Vérification du Solde Papier)"):
     choix_chance = st.radio("Sélectionnez la chance à auditer :", ["RN", "PI", "PM"], horizontal=True)
     
-    labels_traduction = {
-        "RN": ("ROUGE", "NOIR"),
-        "PI": ("PAIR", "IMPAIR"),
-        "PM": ("PASSE", "MANQUE")
-    }
+    labels_traduction = {"RN": ("ROUGE", "NOIR"), "PI": ("PAIR", "IMPAIR"), "PM": ("PASSE", "MANQUE")}
     lbl_a, lbl_b = labels_traduction[choix_chance]
 
     donnees_audit = []
@@ -358,21 +328,22 @@ with st.expander("🔍 INSPECTEUR CHIRURGICAL DE L'ARMÉE (Vérification des Blo
         elif intention_brute == "N": intention_visuelle = lbl_b
         else: intention_visuelle = "🚫 Saut (Condition non remplie)"
 
-        # Calcul de la norme théorique globale pour l'affichage de contrôle
-        norme_theorique = round(j.total_opportunites / 8.0, 2) if j.total_opportunites > 0 else 0.0
-
         type_c_prochain = j.determiner_type_coup(prochain_coup_absolu)
         lettre_visée = (prochain_coup_absolu - 1) % 3
+
+        # Formatage du solde avec le signe "+" pour coller au papier
+        solde_texte = f"+{j.solde_global}" if j.solde_global > 0 else str(j.solde_global)
 
         donnees_audit.append({
             "ID Group": j.id,
             "Figure Code": j.fig_generique,  
             "Figure Réelle": fig_visuelle,
             "Décalage Config": j.dec_initial,
-            "EN RETARD (Global)": f"✅ OUI" if j.retard_constate else "❌ NON",
-            "Apparitions globales": f"{j.apparitions_totales} / {norme_theorique} th.",
+            "EN RETARD": f"✅ OUI" if j.retard_constate else "❌ NON",
+            "SOLDE GLOBAL": solde_texte,
+            "Survenues ce Carton": f"{j.survenues_carton_actuel} fois",
             "Type Coup Prochain": f"Coup {type_c_prochain} (Lettre {lettre_visée+1})",
-            "Mémoire Coup Précédent": "Aucune (Début de bloc)" if type_c_prochain == 1 else f"Dernier coup {j.resultat_coup_precedent}",
+            "Mémoire Bloc": "Début de bloc" if type_c_prochain == 1 else f"Coup d'avant {j.resultat_coup_precedent}",
             "Action Prochaine": intention_visuelle
         })
     
@@ -383,8 +354,5 @@ st.write("---")
 st.subheader(f"📇 Permanence enregistrée ({total_boules_global} boules)")
 if st.session_state.historique:
     if len(st.session_state.historique) > 150:
-        st.info(f"... [Permanence active] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
-    else:
-        st.info(", ".join([str(x) for x in st.session_state.historique]))
-else: 
-    st.write("*Le serveur cloud est vide. Enregistrez un numéro pour démarrer.*")
+        st.info(f"... [Permanence] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
+    else: st.info(", ".join([str(x) for x in st.session_state.historique]))
