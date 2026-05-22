@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Fréquence des Retards", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Vraie Fenêtre Glissante", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES_GENERIQUES = ["ooo", "oox", "oxo", "oxx", "xxx", "xxo", "xox", "xoo"]
 
@@ -39,7 +39,7 @@ def sauvegarder_permanence_cloud(nouvelle_liste):
     if sha: data["sha"] = sha
     requests.put(URL_API, headers=headers, data=json.dumps(data))
 
-# --- STRUCTURE DU JOUEUR (GROUPE) ---
+# --- STRUCTURE DU JOUEUR (FENÊTRE GLISSANTE) ---
 class JoueurGlissant:
     def __init__(self, id_j, chance_type, fig_generique, dec):
         self.id = id_j
@@ -48,13 +48,13 @@ class JoueurGlissant:
         self.dec_initial = dec  
         self.dec_courant = dec  
         
-        self.index_etape = 0         # Position dans la figure de 3 coups (0, 1 ou 2)
-        self.statut = "JOUER"        # "JOUER" ou "ARRET" suite à une perte
-        self.retard_constate = False # Devient True si apparitions < 3 à la fin du carton
+        self.index_etape = 0         # Étape de suivi de mise en cours (0, 1, 2)
+        self.statut = "JOUER"        # "JOUER" ou "ARRET"
+        self.retard_constate = False 
         
         self.compteur_coups_carton = 0
-        self.compteur_apparitions = 0  # COMPTABILITÉ STRICTE DES RETARDS (Fréquence d'apparition)
-        self.historique_figure_en_cours = [] # Stocke les 3 coups pour valider si la figure s'est produite
+        self.compteur_apparitions = 0  
+        self.memoire_3_coups = []    # Fenêtre glissante pour détecter l'apparition des figures
 
     def obtenir_traduction_figure(self):
         mappage = {
@@ -66,8 +66,6 @@ class JoueurGlissant:
         return "".join([dico[lettre] for lettre in self.fig_generique])
 
     def intention(self):
-        # On ne donne un ordre de mise QUE si le décalage est purgé,
-        # que le groupe est qualifié (en retard) et qu'il n'est pas en "ARRET"
         if self.dec_courant > 0 or self.statut == "ARRET" or not self.retard_constate:
             return None
         fig_traduite = self.obtenir_traduction_figure()
@@ -80,51 +78,44 @@ class JoueurGlissant:
             return
 
         if est_zero:
-            # Le zéro est neutre pour la comptabilité des apparitions de figures, 
-            # mais suspend l'index si le joueur était en train de miser
-            return
+            return # Le zéro est neutre pour l'observation des formes
 
         self.compteur_coups_carton += 1
         fig_traduite = self.obtenir_traduction_figure()
+        
+        # 1. Gestion de la fenêtre glissante d'apparition (Indépendante des mises)
+        self.memoire_3_coups.append(tirage_epure)
+        if len(self.memoire_3_coups) > 3:
+            self.memoire_3_coups.pop(0)
+            
+        if "".join(self.memoire_3_coups) == fig_traduite:
+            self.compteur_apparitions += 1
+
+        # 2. Gestion de la marche du jeu réel (Arbre de décision)
         attendu = fig_traduite[self.index_etape]
-        
-        # 1. Collecte du tirage pour analyser l'apparition de la figure globale
-        self.historique_figure_en_cours.append(tirage_epure)
-        
-        # 2. Gestion de la marche du jeu réel / virtuel
         if tirage_epure == attendu:
-            # Coup gagnant -> On avance à l'étape suivante de la figure
             self.index_etape += 1
+            if self.index_etape >= 3:
+                self.index_etape = 0 # Figure complétée avec succès !
         else:
-            # Coup perdant -> Si on jouait réellement, on applique l'ARRÊT immédiat
             if self.retard_constate and self.statut == "JOUER":
                 self.statut = "ARRET"
-            self.index_etape += 1
+            self.index_etape = 0 # Retour à la case départ suite à une perte
 
-        # 3. Validation de la fin d'une figure de 3 coups
-        if self.index_etape >= 3:
-            # On vérifie si la figure complète de 3 coups correspond à la figure cible du joueur
-            sequence_produite = "".join(self.historique_figure_en_cours)
-            if sequence_produite == fig_traduite:
-                self.compteur_apparitions += 1 # La figure est apparue !
-            
-            # Réinitialisation pour la prochaine figure de 3 coups
-            self.index_etape = 0
-            self.historique_figure_en_cours = []
+        # 3. Fin de cycle d'une figure (si le joueur n'était pas qualifié, il guette le coup d'envoi)
+        if not self.retard_constate and self.index_etape == 0:
             self.statut = "JOUER"
 
-        # 4. FIN DU CARTON DE 24 COUPS ÉPURÉS : RECALCUL DES RETARDS
+        # 4. FIN DU CARTON DE 24 COUPS ÉPURÉS
         if self.compteur_coups_carton == 24:
-            # NORME THÉORIQUE = 3 apparitions. 
-            # Le groupe est qualifié en RETARD uniquement s'il est apparu moins de 3 fois.
+            # Norme théorique glissante réajustée (environ 3 apparitions attendues)
             self.retard_constate = self.compteur_apparitions < 3
             
-            # Reset complet pour le carton suivant
+            # Réinitialisation du carton
             self.compteur_apparitions = 0
             self.compteur_coups_carton = 0
             self.dec_courant = self.dec_initial  
             self.index_etape = 0
-            self.historique_figure_en_cours = []
             self.statut = "JOUER"
 
 # --- CHARGEMENT INITIAL ---
@@ -216,7 +207,7 @@ for num in st.session_state.historique:
         v_n = sum(1 for j in armee_locale[chance] if j.intention() == "N")
         mises_du_coup[chance] = v_r - v_n
 
-    for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "V", "M"))]:
+    for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
         net_mised = mises_du_coup[chance]
         if net_mised != 0:
             if est_zero:
@@ -292,7 +283,7 @@ with c3: generer_bloc_mise("Passe / Manque", votes["PM"]["R"], votes["PM"]["N"],
 
 # --- OUTIL D'AUDIT ET DE VÉRIFICATION VISUELLE ---
 st.write("---")
-with st.expander("🔍 INSPECTEUR DE L'ARMÉE VIRTUELLE (Outil de Vérification)"):
+with st.expander("🔍 INSPECTEUR DE L'ARMÉE VIRTUELLE"):
     choix_chance = st.radio("Sélectionnez la chance à auditer :", ["RN", "PI", "PM"], horizontal=True)
     
     labels_traduction = {
@@ -315,10 +306,9 @@ with st.expander("🔍 INSPECTEUR DE L'ARMÉE VIRTUELLE (Outil de Vérification)
             "Figure Code": j.fig_generique,  
             "Figure Réelle": fig_visuelle,
             "Décalage Config": j.dec_initial,
-            "Décalage Restant": j.dec_courant,
             "Statut Actuel": j.statut,
             "EN RETARD (<3)": f"✅ OUI" if j.retard_constate else "❌ NON",
-            "Apparitions dans ce Carton": f"{j.compteur_apparitions} / 3",
+            "Apparitions (Glissantes)": f"{j.compteur_apparitions} / 3",
             "Progression Carton": f"{j.compteur_coups_carton} / 24",
             "Action Prochaine": intention_visuelle
         })
