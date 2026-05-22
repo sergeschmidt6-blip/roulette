@@ -329,3 +329,11 @@ with st.expander("🔍 INSPECTEUR DES ALIGNEMENTS DE CYCLES"):
             "Action Prochaine": intention_visuelle
         })
     st.dataframe(pd.DataFrame(donnees_audit), use_container_width=True, hide_index=True)
+# --- AFFICHAGE DE LA PERMANENCE EN BAS DE PAGE ---
+st.write("---")
+with st.expander(f"📋 Voir la Permanence Enregistrée ({len(st.session_state.historique)} boules)"):
+    if st.session_state.historique:
+        # Affichage sous forme de blocs de texte espacés pour une lecture facile
+        st.code(", ".join([str(x) for x in st.session_state.historique]))
+    else:
+        st.info("Aucun numéro dans la permanence pour le moment.")
