@@ -8,8 +8,8 @@ import json
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Marche Triomphale — Moteur Certifié", layout="wide", initial_sidebar_state="expanded")
 
-# Base des figures de 3 coups
-FIGURES_GENERIQUES = ["AAA", "AAB", "ABA", "ABB", "BBB", "BBA", "BAB", "BAA"]
+# Base des figures de 3 coups avec 'o' et 'x'
+FIGURES_GENERIQUES = ["ooo", "oox", "oxo", "oxx", "xxx", "xxo", "xox", "xoo"]
 
 # --- CONNEXION CLOUD GITHUB ---
 TOKEN = st.secrets.get("GITHUB_TOKEN", "")
@@ -45,7 +45,7 @@ class JoueurGlissant:
     def __init__(self, id_j, chance_type, fig_generique, dec):
         self.id = id_j
         self.chance_type = chance_type 
-        self.fig_generique = fig_generique  # Ex: "ABA"
+        self.fig_generique = fig_generique  # Ex: "oxo"
         self.dec_initial = dec  
         self.dec_courant = dec  
         self.index_etape = 0
@@ -55,11 +55,11 @@ class JoueurGlissant:
         self.compteur_coups_carton = 0
 
     def obtenir_traduction_figure(self):
-        # Traduit dynamiquement la figure générique (A/B) selon la chance
+        # MAPPAGE MIS À JOUR AVEC 'o' ET 'x'
         mappage = {
-            "RN": {"A": "R", "B": "N"},
-            "PI": {"A": "R", "B": "N"}, # R=Pair, N=Impair en interne
-            "PM": {"A": "R", "B": "N"}  # R=Passe, N=Manque en interne
+            "RN": {"o": "R", "x": "N"},
+            "PI": {"o": "R", "x": "N"}, 
+            "PM": {"o": "R", "x": "N"}  
         }
         dico = mappage[self.chance_type]
         return "".join([dico[lettre] for lettre in self.fig_generique])
@@ -96,17 +96,14 @@ class JoueurGlissant:
 
         self.solde_du_carton += gain_virtuel
 
-        # Gestion de l'arrêt temporaire qui se réinitialise tous les 3 coups de la permanence
         if not est_zero and self.index_etape == 0:
             if self.retard_constate:
                 self.statut = "JOUER"
 
-        # CLÔTURE STRICTE DU CARTON DE 24 COUPS ÉPURÉS
         if not est_zero and self.compteur_coups_carton == 24:
             norme_du_carton = 3
             self.retard_constate = self.solde_du_carton < norme_du_carton
             
-            # Reset des compteurs sans briser le cycle de l'index_etape
             self.solde_du_carton = 0
             self.compteur_coups_carton = 0
             self.dec_courant = self.dec_initial  
@@ -122,8 +119,8 @@ def analyser_numero(num):
     if num == 0: return "0", "0", "0"
     rouges = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
     rn = "R" if num in rouges else "N"
-    pi = "R" if num % 2 == 0 else "N" # R=Pair, N=Impair
-    pm = "R" if num >= 19 else "N"    # R=Passe, N=Manque
+    pi = "R" if num % 2 == 0 else "N" 
+    pm = "R" if num >= 19 else "N"    
     return rn, pi, pm
 
 # --- SIDEBAR ---
@@ -280,7 +277,6 @@ st.write("---")
 with st.expander("🔍 INSPECTEUR DE L'ARMÉE VIRTUELLE (Outil de Vérification)"):
     choix_chance = st.radio("Sélectionnez la chance à auditer :", ["RN", "PI", "PM"], horizontal=True)
     
-    # Dictionnaire de traduction d'affichage propre selon la sélection
     labels_traduction = {
         "RN": ("ROUGE", "NOIR"),
         "PI": ("PAIR", "IMPAIR"),
@@ -298,7 +294,7 @@ with st.expander("🔍 INSPECTEUR DE L'ARMÉE VIRTUELLE (Outil de Vérification)
 
         donnees_audit.append({
             "ID Joueur": j.id,
-            "Figure Code": j.fig_generique,
+            "Figure Code": j.fig_generique,  # Affichera proprement 'ooo', 'oox', etc.
             "Figure Réelle": fig_visuelle,
             "Décalage Config": j.dec_initial,
             "Décalage Restant": j.dec_courant,
