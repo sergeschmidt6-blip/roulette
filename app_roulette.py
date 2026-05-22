@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Synchronisation", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Version Stable", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES_GENERIQUES = ["ooo", "oox", "oxo", "oxx", "xxx", "xxo", "xox", "xoo"]
 
@@ -28,7 +28,7 @@ def charger_permanence_cloud():
             if not contenu_nettoye: return []
             return [int(x) for x in contenu_nettoye.split(",") if x != ""]
     except Exception as e:
-        st.sidebar.error(f"Erreur Cloud : {e}")
+        st.sidebar.error(f"Erreur de synchronisation Cloud : {e}")
     return []
 
 def sauvegarder_permanence_cloud(nouvelle_liste):
@@ -44,15 +44,14 @@ def sauvegarder_permanence_cloud(nouvelle_liste):
         requests.put(URL_API, headers=headers, data=json.dumps(data))
     except Exception: pass
 
-# --- LOGIQUE UNIVERSELLE DU RYTHME DES COUPS ---
-def determiner_type_coup_global(coup_absolu):
-    """Calcule si on est au coup 1, 2 ou 3 du bloc actuel de la table (de 1 à 24)"""
-    pos_carton = ((coup_absolu - 1) % 24) + 1
-    if pos_carton in [1, 4, 7, 10, 13, 16, 19, 22]: return 1
-    elif pos_carton in [2, 5, 8, 11, 14, 17, 20, 23]: return 2
+# --- LOGIQUE DU RYTHME DES COUPS ---
+def determiner_type_coup_global(position_carton):
+    """Détermine strictement le type de coup (1, 2 ou 3) selon la position dans le carton (1 à 24)"""
+    if position_carton in [1, 4, 7, 10, 13, 16, 19, 22]: return 1
+    elif position_carton in [2, 5, 8, 11, 14, 17, 20, 23]: return 2
     else: return 3
 
-# --- STRUCTURE DU JOUEUR (BLOCS DE 3 FERMÉS) ---
+# --- STRUCTURE DU JOUEUR ---
 class JoueurMT:
     def __init__(self, id_j, chance_type, fig_generique, dec):
         self.id = id_j
@@ -64,7 +63,6 @@ class JoueurMT:
         self.retard_constate = False 
         self.compteur_coups_carton = 0
         
-        # TABLEAU DE POINTAGE COMPTABLE
         self.solde_global = 0  
         self.survenues_carton_actuel = 0  
         
@@ -79,14 +77,13 @@ class JoueurMT:
         }
         return "".join([mappage[self.chance_type][lettre] for lettre in self.fig_generique])
 
-    def intention(self, coup_absolu):
-        # Un groupe ne formule d'intention que s'il a fini son décalage et qu'il est qualifié en retard
+    def intention(self, position_carton):
         if self.dec_courant > 0 or not self.retard_constate:
             return None
             
-        type_coup = determiner_type_coup_global(coup_absolu)
+        type_coup = determiner_type_coup_global(position_carton)
         fig_traduite = self.obtenir_traduction_figure()
-        idx_lettre = (coup_absolu - 1) % 3
+        idx_lettre = (position_carton - 1) % 3
         
         if type_coup == 1:
             return fig_traduite[idx_lettre]
@@ -97,7 +94,7 @@ class JoueurMT:
             if self.resultat_coup_precedent == "GAGNÉ": return fig_traduite[idx_lettre]
             return None
 
-    def actualiser(self, tirage_epure, est_zero, coup_absolu):
+    def actualiser(self, tirage_epure, est_zero, position_carton):
         if self.dec_courant > 0:
             if not est_zero: self.dec_courant -= 1
             return
@@ -106,16 +103,17 @@ class JoueurMT:
 
         self.compteur_coups_carton += 1
         fig_traduite = self.obtenir_traduction_figure()
-        type_coup = determiner_type_coup_global(coup_absolu)
+        type_coup = determiner_type_coup_global(position_carton)
         
+        # Enregistrement dans le bloc de 3
         self.tampon_bloc_3.append(tirage_epure)
-        
         if len(self.tampon_bloc_3) == 3:
             if "".join(self.tampon_bloc_3) == fig_traduite:
                 self.survenues_carton_actuel += 1
             self.tampon_bloc_3 = [] 
 
-        intent = self.intention(coup_absolu)
+        # Enregistrement du résultat pour le coup d'après
+        intent = self.intention(position_carton)
         if intent:
             if tirage_epure == intent: self.resultat_coup_precedent = "GAGNÉ"
             else: self.resultat_coup_precedent = "PERDU"
@@ -125,6 +123,7 @@ class JoueurMT:
         if type_coup == 3:
             self.resultat_coup_precedent = None
 
+        # Clôture fin de carton
         if self.compteur_coups_carton == 24:
             if self.survenues_carton_actuel == 0: evolution = -1
             elif self.survenues_carton_actuel == 1: evolution = 0
@@ -138,27 +137,25 @@ class JoueurMT:
             self.dec_courant = self.dec_initial  
             self.resultat_coup_precedent = None
 
-# --- INITIALISATION ---
+# --- RECHARGEMENT DE LA PERMANENCE ---
 if "historique" not in st.session_state:
     st.session_state.historique = charger_permanence_cloud()
-if "capital_reel" not in st.session_state:
-    st.session_state.capital_reel = 0.0
 
 def analyser_numero(num):
     if num == 0: return "0", "0", "0"
     rouges = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
     return ("R" if num in rouges else "N"), ("R" if num % 2 == 0 else "N"), ("R" if num >= 19 else "N")
 
-# --- SIDEBAR CONTROL ---
+# --- BARRE LATÉRALE DE CONTRÔLE ---
 st.sidebar.header("⚙️ CONTRÔLE DE SESSION")
 capital_placeholder = st.sidebar.empty()
 
-if st.sidebar.button("🔄 Forcer la relecture du serveur", use_container_width=True):
+if st.sidebar.button("🔄 Réimporter depuis le Serveur", use_container_width=True):
     st.session_state.historique = charger_permanence_cloud()
     st.rerun()
 
-import_txt = st.sidebar.text_area("Coller une série :", placeholder="Ex: 14,32,0,5")
-if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=True) and import_txt:
+import_txt = st.sidebar.text_area("Coller une série de numéros :", placeholder="Ex: 14,32,0,5")
+if st.sidebar.button("📥 Importer la série", use_container_width=True) and import_txt:
     try:
         nettoye = import_txt.replace("\n", "").replace(" ", "")
         st.session_state.historique.extend([int(x) for x in nettoye.split(",") if x != ""])
@@ -166,35 +163,37 @@ if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=T
         st.rerun()
     except ValueError: pass
 
-nb_sim = st.sidebar.number_input("Nombre de coups :", min_value=10, max_value=2000, value=100, step=100)
-if st.sidebar.button(f"⚡ Injecter +{nb_sim} coups", use_container_width=True):
+nb_sim = st.sidebar.number_input("Générer des coups aléatoires :", min_value=10, max_value=1000, value=100, step=100)
+if st.sidebar.button(f"⚡ Injecter {nb_sim} coups", use_container_width=True):
     st.session_state.historique.extend([random.randint(0, 36) for _ in range(nb_sim)])
     sauvegarder_permanence_cloud(st.session_state.historique)
     st.rerun()
 
-if st.sidebar.checkbox("⚠️ Déverrouiller le bouton") and st.sidebar.button("🔴 SUPPRIMER TOUT DU SERVEUR", use_container_width=True):
+if st.sidebar.checkbox("⚠️ Déverrouiller la RAZ") and st.sidebar.button("🔴 EFFACER TOUTES LES DONNÉES", use_container_width=True):
     st.session_state.historique = []
     sauvegarder_permanence_cloud([])
     st.rerun()
 
-# --- CLAVIER DE SAISIE ---
-st.subheader("📥 Enregistrer un numéro")
-cols_clavier = st.columns(13)
-with cols_clavier[0]:
-    if st.button("🟢 0", use_container_width=True):
-        st.session_state.historique.append(0)
-        sauvegarder_permanence_cloud(st.session_state.historique)
-        st.rerun()
+# --- CLAVIER NUMÉRIQUE STRUCTURÉ (Évite les barres géantes) ---
+st.subheader("📥 Enregistrer un numéro sorti au Casino")
+grille_clavier = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+    [25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]
+]
+rouges_liste = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
 
-for n in range(1, 37):
-    col_idx = ((n - 1) % 12) + 1
-    rouges = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
-    if st.button(f"🔴 {n}" if n in rouges else f"⚫ {n}", use_container_width=True, key=f"btn_{n}"):
-        st.session_state.historique.append(n)
-        sauvegarder_permanence_cloud(st.session_state.historique)
-        st.rerun()
+for rangee in grille_clavier:
+    cols = st.columns(len(rangee))
+    for idx, n in enumerate(rangee):
+        if n == 0: label = f"🟢 {n}"
+        else: label = f"🔴 {n}" if n in rouges_liste else f"⚫ {n}"
+        if cols[idx].button(label, use_container_width=True, key=f"clavier_num_{n}"):
+            st.session_state.historique.append(n)
+            sauvegarder_permanence_cloud(st.session_state.historique)
+            st.rerun()
 
-# --- INSTANCIATION DE L'ARMÉE ---
+# --- RECONSTRUCTION DE L'ARMÉE ---
 armee_locale = {"RN": [], "PI": [], "PM": []}
 id_j = 1
 for chance in ["RN", "PI", "PM"]:
@@ -207,37 +206,58 @@ capital_calcule = 0.0
 total_boules_global = len(st.session_state.historique)
 coup_absolu_epure = 0
 
+# Traitement chronologique
 for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
-    if not est_zero: coup_absolu_epure += 1
+    
+    if not est_zero: 
+        coup_absolu_epure += 1
+        pos_carton_courante = ((coup_absolu_epure - 1) % 24) + 1
+    else:
+        pos_carton_courante = None
 
-    mises_du_coup = {}
-    for chance in ["RN", "PI", "PM"]:
-        v_r = sum(1 for j in armee_locale[chance] if j.intention(coup_absolu_epure) == "R")
-        v_n = sum(1 for j in armee_locale[chance] if j.intention(coup_absolu_epure) == "N")
-        mises_du_coup[chance] = v_r - v_n
+    # Évaluation des gains/pertes
+    if not est_zero:
+        mises_du_coup = {}
+        for chance in ["RN", "PI", "PM"]:
+            v_r = sum(1 for j in armee_locale[chance] if j.intention(pos_carton_courante) == "R")
+            v_n = sum(1 for j in armee_locale[chance] if j.intention(pos_carton_courante) == "N")
+            mises_du_coup[chance] = v_r - v_n
 
-    for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
-        net_mised = mises_du_coup[chance]
-        if net_mised != 0:
-            if est_zero: capital_calcule -= abs(net_mised) * 0.5
-            elif (net_mised > 0 and tirage_code == code_r) or (net_mised < 0 and tirage_code == code_n): capital_calcule += abs(net_mised)
-            else: capital_calcule -= abs(net_mised)
+        for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
+            net_mised = mises_du_coup[chance]
+            if net_mised != 0:
+                if (net_mised > 0 and tirage_code == code_r) or (net_mised < 0 and tirage_code == code_n): 
+                    capital_calcule += abs(net_mised)
+                else: 
+                    capital_calcule -= abs(net_mised)
+    else:
+        # Gestion du Zéro
+        pos_carton_virtuelle = ((coup_absolu_epure) % 24) + 1
+        mises_du_coup = {}
+        for chance in ["RN", "PI", "PM"]:
+            v_r = sum(1 for j in armee_locale[chance] if j.intention(pos_carton_virtuelle) == "R")
+            v_n = sum(1 for j in armee_locale[chance] if j.intention(pos_carton_virtuelle) == "N")
+            mises_du_coup[chance] = v_r - v_n
+        for chance in ["RN", "PI", "PM"]:
+            if mises_du_coup[chance] != 0:
+                capital_calcule -= abs(mises_du_coup[chance]) * 0.5
 
-    for j in armee_locale["RN"]: j.actualiser(rn, est_zero, coup_absolu_epure)
-    for j in armee_locale["PI"]: j.actualiser(pi, est_zero, coup_absolu_epure)
-    for j in armee_locale["PM"]: j.actualiser(pm, est_zero, coup_absolu_epure)
+    # Mise à jour des états
+    for j in armee_locale["RN"]: j.actualiser(rn, est_zero, pos_carton_courante)
+    for j in armee_locale["PI"]: j.actualiser(pi, est_zero, pos_carton_courante)
+    for j in armee_locale["PM"]: j.actualiser(pm, est_zero, pos_carton_courante)
 
-st.session_state.capital_reel = capital_calcule
+# Préparation du coup suivant
 prochain_coup_absolu = coup_absolu_epure + 1
-position_dans_carton = ((prochain_coup_absolu - 1) % 24) + 1
-type_coup_prochain_global = determiner_type_coup_global(prochain_coup_absolu)
+position_dans_carton_suivante = ((prochain_coup_absolu - 1) % 24) + 1
+type_coup_prochain_global = determiner_type_coup_global(position_dans_carton_suivante)
 
 votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 for chance in ["RN", "PI", "PM"]:
     for j in armee_locale[chance]:
-        intent = j.intention(prochain_coup_absolu)
+        intent = j.intention(position_dans_carton_suivante)
         if intent: votes[chance][intent] += 1
 
 qualifies_rn = sum(1 for j in armee_locale["RN"] if j.retard_constate)
@@ -246,11 +266,11 @@ qualifies_pm = sum(1 for j in armee_locale["PM"] if j.retard_constate)
 
 capital_placeholder.markdown(
     f"""
-    ### 💰 **{st.session_state.capital_reel} p.**
+    ### 💰 **{capital_calcule} p.**
     * Total boules : **{total_boules_global}**
     * Boules épurées : **{coup_absolu_epure}**
     * ---
-    * Position Carton : **{position_dans_carton} / 24**
+    * Position Carton : **{position_dans_carton_suivante} / 24**
     * ---
     * Type Coup Suivant : **Coup {type_coup_prochain_global}**
     * ---
@@ -261,12 +281,12 @@ capital_placeholder.markdown(
     """
 )
 
-# --- VISUALISATION ---
+# --- PANNEAU PRINCIPAL ---
 st.header("🎯 ORDRES DE MISES POUR LE PROCHAIN COUP")
-if coup_absolu_epure < 26:
-    st.info("⏳ **Observation...** En attente de la première clôture de carton.")
+if coup_absolu_epure < 24:
+    st.info("⏳ **Observation...** En attente de la fin du premier carton de 24 boules épurées.")
 else:
-    st.success(f"⚔️ **Analyse du coup épuré n°{prochain_coup_absolu}** (Étape {((prochain_coup_absolu-1)%3)+1} du bloc).")
+    st.success(f"⚔️ Analyse du coup épuré n°{prochain_coup_absolu} — Position Carton {position_dans_carton_suivante}/24 (Coup {type_coup_prochain_global}).")
 
 c1, c2, c3 = st.columns(3)
 def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
@@ -274,7 +294,7 @@ def generer_bloc_mise(titre, v_r, v_n, label_r, label_n):
     lettre_r, lettre_n = label_r.split()[0], label_n.split()[0]
     with st.container(border=True):
         st.subheader(titre)
-        if coup_absolu_epure < 26: st.markdown("### ⏳ **OBSERVATION**")
+        if coup_absolu_epure < 24: st.markdown("### ⏳ **OBSERVATION**")
         elif bal > 0: st.markdown(f"### 🟢 **{label_r} : {bal} p.**")
         elif bal < 0: st.markdown(f"### 🟢 **{label_n} : {abs(bal)} p.**")
         else: st.markdown("### ⏸️ **NE RIEN MISER**")
@@ -285,16 +305,15 @@ with c2: generer_bloc_mise("Pair / Impair", votes["PI"]["R"], votes["PI"]["N"], 
 with c3: generer_bloc_mise("Passe / Manque", votes["PM"]["R"], votes["PM"]["N"], "PASSE ⬆️", "MANQUE ⬇️")
 
 st.write("---")
-with st.expander("🔍 INSPECTEUR CHIRURGICAL DES COMPTES (Vérification du Solde Papier)"):
+with st.expander("🔍 INSPECTEUR DE L'ARMÉE (Vérification des Comptes)"):
     choix_chance = st.radio("Sélectionnez la chance à auditer :", ["RN", "PI", "PM"], horizontal=True)
     lbl_a, lbl_b = {"RN": ("ROUGE", "NOIR"), "PI": ("PAIR", "IMPAIR"), "PM": ("PASSE", "MANQUE")}[choix_chance]
 
     donnees_audit = []
     for j in armee_locale[choix_chance]:
         fig_visuelle = j.obtenir_traduction_figure().replace("R", lbl_a[0]).replace("N", lbl_b[0])
-        intention_brute = j.intention(prochain_coup_absolu)
+        intention_brute = j.intention(position_dans_carton_suivante)
         intention_visuelle = lbl_a if intention_brute == "R" else (lbl_b if intention_brute == "N" else "🚫 Saut")
-
         solde_texte = f"+{j.solde_global}" if j.solde_global > 0 else str(j.solde_global)
 
         donnees_audit.append({
@@ -304,7 +323,14 @@ with st.expander("🔍 INSPECTEUR CHIRURGICAL DES COMPTES (Vérification du Sold
             "EN RETARD": f"✅ OUI" if j.retard_constate else "❌ NON",
             "SOLDE GLOBAL": solde_texte,
             "Survenues ce Carton": f"{j.survenues_carton_actuel} / 8 max",
-            "Type Coup Prochain": f"Coup {type_coup_prochain_global} (Lettre {((prochain_coup_absolu - 1) % 3)+1})",
+            "Type Coup Prochain": f"Coup {type_coup_prochain_global} (Lettre {((position_dans_carton_suivante - 1) % 3)+1})",
             "Action Prochaine": intention_visuelle
         })
     st.dataframe(pd.DataFrame(donnees_audit), use_container_width=True, hide_index=True)
+
+st.write("---")
+st.subheader(f"📇 Permanence sauvegardée ({total_boules_global} boules)")
+if st.session_state.historique:
+    st.info(", ".join([str(x) for x in st.session_state.historique]))
+else:
+    st.warning("Aucun numéro enregistré dans la permanence actuelle.")
