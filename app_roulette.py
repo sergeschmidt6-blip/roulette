@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Cartons Étanches", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Moteur Certifié", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES = ["RRR", "RRN", "RNR", "RNN", "NNN", "NNR", "NRN", "NRR"]
 
@@ -39,70 +39,80 @@ def sauvegarder_permanence_cloud(nouvelle_liste):
     if sha: data["sha"] = sha
     requests.put(URL_API, headers=headers, data=json.dumps(data))
 
-# --- STRUCT DU JOUEUR ---
+# --- STRUCTURE DU JOUEUR INDÉPENDANT ---
 class JoueurGlissant:
     def __init__(self, id_j, chance_type, fig, dec):
         self.id = id_j
         self.chance_type = chance_type 
         self.fig = fig
-        self.dec_initial = dec  
+        self.dec_initial = dec  # Sauvegarde pour réinitialisation à chaque carton
         self.dec_courant = dec  
         self.index_etape = 0
         self.statut = "JOUER"
         self.retard_constate = False
-        self.solde_du_carton = 0  # Comptabilité STRICTE sur les 24 coups en cours
+        self.solde_du_carton = 0  
         self.compteur_coups_carton = 0
 
     def intention(self):
+        # Un joueur ne donne un ordre RÉEL que s'il a purgé son décalage,
+        # s'il n'est pas suspendu (ARRET) et s'il est qualifié par son retard.
         if self.dec_courant > 0 or self.statut == "ARRET" or not self.retard_constate:
             return None
         return self.fig[self.index_etape]
 
     def actualiser(self, tirage_epure, est_zero):
+        # Gestion stricte du décalage initial (Phase d'attente passive)
         if self.dec_courant > 0:
             if not est_zero: 
                 self.dec_courant -= 1
             return
 
-        gain = 0
+        gain_virtuel = 0
         if est_zero:
+            # Le zéro impacte la comptabilité si le joueur est actif sur la table
             if self.statut == "JOUER" and self.retard_constate: 
-                gain = -0.5
+                gain_virtuel = -0.5
         else:
             self.compteur_coups_carton += 1
             attendu = self.fig[self.index_etape]
             
-            if self.retard_constate and self.statut == "JOUER":
-                if tirage_epure == attendu:
-                    gain = 1
+            # Calcul du résultat du coup (commun au jeu réel et virtuel)
+            if tirage_epure == attendu:
+                gain_virtuel = 1
+                # L'arrêt ne bloque le joueur que s'il mise de l'argent réel
+                if self.retard_constate and self.statut == "JOUER":
                     self.index_etape += 1
                 else:
-                    gain = -1
-                    self.statut = "ARRET"
                     self.index_etape += 1
             else:
-                self.index_etape += 1
+                gain_virtuel = -1
+                if self.retard_constate and self.statut == "JOUER":
+                    self.statut = "ARRET"
+                    self.index_etape += 1
+                else:
+                    self.index_etape += 1
 
-        self.solde_du_carton += gain
+        self.solde_du_carton += gain_virtuel
 
-        # Fin d'une figure de 3 coups
+        # Cycle des figures de 3 coups
         if not est_zero and self.index_etape >= 3:
             self.index_etape = 0
-            self.statut = "JOUER"
+            if self.retard_constate:
+                self.statut = "JOUER"
 
-        # CLÔTURE DU CARTON INDIVIDUEL (Au bout de 24 coups épurés subis par ce joueur)
+        # CLÔTURE STRICTE DU CARTON DE 24 COUPS ÉPURÉS
         if not est_zero and self.compteur_coups_carton == 24:
-            # La norme théorique attendue pour UN SEUL CARTON de 24 coups épurés est de +3 unités
             norme_du_carton = 3
             
-            # Le joueur se qualifie pour le PROCHAIN carton uniquement s'il a fait moins que la norme lors de ce carton
+            # Évaluation de la qualification pour le carton suivant
             self.retard_constate = self.solde_du_carton < norme_du_carton
             
-            # RESET complet des compteurs du joueur pour repartir à zéro sur le carton suivant
+            # Remise à zéro complète et application du décalage pour le prochain bloc
             self.solde_du_carton = 0
             self.compteur_coups_carton = 0
-            self.statut = "JOUER"
+            self.dec_courant = self.dec_initial  # Rétablit l'asynchronisme de la vague
             self.index_etape = 0
+            self.statut = "JOUER"
 
 # --- CHARGEMENT INITIAL ---
 if "historique" not in st.session_state:
@@ -152,7 +162,7 @@ if confirm_reset:
         sauvegarder_permanence_cloud([])
         st.rerun()
 
-# --- CLAVIER ---
+# --- CLAVIER DE SAISIE ---
 st.subheader("📥 Enregistrer un numéro sorti au Casino")
 cols_clavier = st.columns(13)
 with cols_clavier[0]:
@@ -171,7 +181,7 @@ for n in range(1, 37):
             sauvegarder_permanence_cloud(st.session_state.historique)
             st.rerun()
 
-# --- RECONSTRUCTION CHRONOLOGIQUE STRICTE ---
+# --- INSTANCIATION DE L'ARMÉE VIRTUELLES ---
 armee_locale = {"RN": [], "PI": [], "PM": []}
 id_j = 1
 for chance in ["RN", "PI", "PM"]:
@@ -182,18 +192,19 @@ for chance in ["RN", "PI", "PM"]:
 
 capital_calcule = 0.0
 
+# --- TOURNANT DE RECONSTRUCTION CHRONOLOGIQUE ---
 for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
     
-    # 1. Intentions AVANT l'impact
+    # 1. Collecte des intentions de mise AVANT la sortie du numéro
     mises_du_coup = {}
     for chance in ["RN", "PI", "PM"]:
         v_r = sum(1 for j in armee_locale[chance] if j.intention() == "R")
         v_n = sum(1 for j in armee_locale[chance] if j.intention() == "N")
         mises_du_coup[chance] = v_r - v_n
 
-    # 2. Impact financier
+    # 2. Calcul des encaissements / décaissements réels
     for chance, (tirage_code, code_r, code_n) in [("RN", (rn, "R", "N")), ("PI", (pi, "R", "N")), ("PM", (pm, "R", "N"))]:
         net_mised = mises_du_coup[chance]
         if net_mised != 0:
@@ -204,7 +215,7 @@ for num in st.session_state.historique:
             else:
                 capital_calcule -= abs(net_mised)
 
-    # 3. Progression des joueurs
+    # 3. Mise à jour de l'historique de chaque joueur
     for j in armee_locale["RN"]: j.actualiser(rn, est_zero)
     for j in armee_locale["PI"]: j.actualiser(pi, est_zero)
     for j in armee_locale["PM"]: j.actualiser(pm, est_zero)
@@ -215,14 +226,14 @@ total_boules = len(st.session_state.historique)
 zeros_purgés = sum(1 for x in st.session_state.historique if x == 0)
 boules_epurees = total_boules - zeros_purgés
 
-# Collecte des intentions futures
+# Préparation du coup suivant
 votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 for chance in ["RN", "PI", "PM"]:
     for j in armee_locale[chance]:
         intent = j.intention()
         if intent: votes[chance][intent] += 1
 
-# Statistiques de qualification
+# Extraction des vrais qualifiés dynamiques
 qualifies_rn = sum(1 for j in armee_locale["RN"] if j.retard_constate)
 qualifies_pi = sum(1 for j in armee_locale["PI"] if j.retard_constate)
 qualifies_pm = sum(1 for j in armee_locale["PM"] if j.retard_constate)
@@ -240,13 +251,13 @@ capital_placeholder.markdown(
     """
 )
 
-# --- AFFICHAGE DES ORDRES ---
+# --- PANEL DES ORDRES DE JEU ---
 st.header("🎯 ORDRES DE MISES POUR LE PROCHAIN COUP")
 
 if boules_epurees < 26:
-    st.info("⏳ **Observation des vagues en cours...** En attente de la purge complète des décalages (26 coups épurés requis).")
+    st.info("⏳ **Observation des vagues...** Attente du décalage (26 boules épurées requises).")
 else:
-    st.success("⚔️ **Session active.** Les vagues glissent de manière autonome.")
+    st.success("⚔️ **Session active.** Fluidité des vagues synchronisée.")
 
 c1, c2, c3 = st.columns(3)
 
@@ -272,7 +283,8 @@ st.write("---")
 st.subheader(f"📇 Permanence sauvegardée ({total_boules} boules)")
 if st.session_state.historique:
     if len(st.session_state.historique) > 150:
-        st.info(f"... [Fichier long - 150 dernières boules affichées] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
+        st.info(f"... [Fichier long] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
     else:
         st.info(", ".join([str(x) for x in st.session_state.historique]))
-else: st.write("*Aucune donnée enregistrée sur le cloud.*")
+else: 
+    st.write("*Aucune donnée enregistrée sur le cloud.*")
