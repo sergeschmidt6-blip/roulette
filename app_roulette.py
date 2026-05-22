@@ -6,7 +6,7 @@ import base64
 import json
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Marche Triomphale — Restauration", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Marche Triomphale — Synchronisation", layout="wide", initial_sidebar_state="expanded")
 
 FIGURES_GENERIQUES = ["ooo", "oox", "oxo", "oxx", "xxx", "xxo", "xox", "xoo"]
 
@@ -17,21 +17,18 @@ FILE_PATH = "permanence.txt"
 URL_API = f"https://api.github.com/repos/{REPO}/contents/{FILE_PATH}"
 
 def charger_permanence_cloud():
-    if not TOKEN or not REPO: 
-        return []
+    if not TOKEN or not REPO: return []
     try:
         headers = {"Authorization": f"token {TOKEN}", "Accept": "application/vnd.github.v3+json"}
         response = requests.get(URL_API, headers=headers)
         if response.status_code == 200:
             donnees = response.json()
             contenu_texte = base64.b64decode(donnees["content"]).decode("utf-8")
-            # Nettoyage strict des sauts de ligne et espaces
             contenu_nettoye = contenu_texte.replace("\n", "").replace(" ", "").strip()
-            if not contenu_nettoye: 
-                return []
+            if not contenu_nettoye: return []
             return [int(x) for x in contenu_nettoye.split(",") if x != ""]
     except Exception as e:
-        st.sidebar.error(f"Erreur de lecture Cloud : {e}")
+        st.sidebar.error(f"Erreur Cloud : {e}")
     return []
 
 def sauvegarder_permanence_cloud(nouvelle_liste):
@@ -45,8 +42,15 @@ def sauvegarder_permanence_cloud(nouvelle_liste):
         data = {"message": "Mise à jour permanence", "content": contenu_base64}
         if sha: data["sha"] = sha
         requests.put(URL_API, headers=headers, data=json.dumps(data))
-    except Exception as e:
-        st.sidebar.error(f"Erreur d'écriture Cloud : {e}")
+    except Exception: pass
+
+# --- LOGIQUE UNIVERSELLE DU RYTHME DES COUPS ---
+def determiner_type_coup_global(coup_absolu):
+    """Calcule si on est au coup 1, 2 ou 3 du bloc actuel de la table (de 1 à 24)"""
+    pos_carton = ((coup_absolu - 1) % 24) + 1
+    if pos_carton in [1, 4, 7, 10, 13, 16, 19, 22]: return 1
+    elif pos_carton in [2, 5, 8, 11, 14, 17, 20, 23]: return 2
+    else: return 3
 
 # --- STRUCTURE DU JOUEUR (BLOCS DE 3 FERMÉS) ---
 class JoueurMT:
@@ -75,17 +79,12 @@ class JoueurMT:
         }
         return "".join([mappage[self.chance_type][lettre] for lettre in self.fig_generique])
 
-    def determiner_type_coup(self, coup_absolu):
-        pos = ((coup_absolu - 1) % 24) + 1
-        if pos in [1, 4, 7, 10, 13, 16, 19, 22]: return 1
-        elif pos in [2, 5, 8, 11, 14, 17, 20, 23]: return 2
-        else: return 3
-
     def intention(self, coup_absolu):
+        # Un groupe ne formule d'intention que s'il a fini son décalage et qu'il est qualifié en retard
         if self.dec_courant > 0 or not self.retard_constate:
             return None
             
-        type_coup = self.determiner_type_coup(coup_absolu)
+        type_coup = determiner_type_coup_global(coup_absolu)
         fig_traduite = self.obtenir_traduction_figure()
         idx_lettre = (coup_absolu - 1) % 3
         
@@ -107,7 +106,7 @@ class JoueurMT:
 
         self.compteur_coups_carton += 1
         fig_traduite = self.obtenir_traduction_figure()
-        type_coup = self.determiner_type_coup(coup_absolu)
+        type_coup = determiner_type_coup_global(coup_absolu)
         
         self.tampon_bloc_3.append(tirage_epure)
         
@@ -127,12 +126,9 @@ class JoueurMT:
             self.resultat_coup_precedent = None
 
         if self.compteur_coups_carton == 24:
-            if self.survenues_carton_actuel == 0:
-                evolution = -1
-            elif self.survenues_carton_actuel == 1:
-                evolution = 0
-            else:
-                evolution = self.survenues_carton_actuel - 1
+            if self.survenues_carton_actuel == 0: evolution = -1
+            elif self.survenues_carton_actuel == 1: evolution = 0
+            else: evolution = self.survenues_carton_actuel - 1
 
             self.solde_global += evolution
             self.retard_constate = (self.solde_global < 0)
@@ -142,7 +138,7 @@ class JoueurMT:
             self.dec_courant = self.dec_initial  
             self.resultat_coup_precedent = None
 
-# --- CONTRÔLE DE L'ÉTAT (SESSION STATE) ---
+# --- INITIALISATION ---
 if "historique" not in st.session_state:
     st.session_state.historique = charger_permanence_cloud()
 if "capital_reel" not in st.session_state:
@@ -151,29 +147,24 @@ if "capital_reel" not in st.session_state:
 def analyser_numero(num):
     if num == 0: return "0", "0", "0"
     rouges = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
-    rn = "R" if num in rouges else "N"
-    pi = "R" if num % 2 == 0 else "N" 
-    pm = "R" if num >= 19 else "N"    
-    return rn, pi, pm
+    return ("R" if num in rouges else "N"), ("R" if num % 2 == 0 else "N"), ("R" if num >= 19 else "N")
 
-# --- SIDEBAR & SIMULATEUR ---
+# --- SIDEBAR CONTROL ---
 st.sidebar.header("⚙️ CONTRÔLE DE SESSION")
 capital_placeholder = st.sidebar.empty()
 
-# Bouton de synchronisation manuelle au cas où
 if st.sidebar.button("🔄 Forcer la relecture du serveur", use_container_width=True):
     st.session_state.historique = charger_permanence_cloud()
     st.rerun()
 
 import_txt = st.sidebar.text_area("Coller une série :", placeholder="Ex: 14,32,0,5")
-if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=True):
-    if import_txt:
-        try:
-            nettoye = import_txt.replace("\n", "").replace(" ", "")
-            st.session_state.historique.extend([int(x) for x in nettoye.split(",") if x != ""])
-            sauvegarder_permanence_cloud(st.session_state.historique)
-            st.rerun()
-        except ValueError: st.sidebar.error("Format incorrect.")
+if st.sidebar.button("📥 Forcer l'importation de masse", use_container_width=True) and import_txt:
+    try:
+        nettoye = import_txt.replace("\n", "").replace(" ", "")
+        st.session_state.historique.extend([int(x) for x in nettoye.split(",") if x != ""])
+        sauvegarder_permanence_cloud(st.session_state.historique)
+        st.rerun()
+    except ValueError: pass
 
 nb_sim = st.sidebar.number_input("Nombre de coups :", min_value=10, max_value=2000, value=100, step=100)
 if st.sidebar.button(f"⚡ Injecter +{nb_sim} coups", use_container_width=True):
@@ -181,14 +172,13 @@ if st.sidebar.button(f"⚡ Injecter +{nb_sim} coups", use_container_width=True):
     sauvegarder_permanence_cloud(st.session_state.historique)
     st.rerun()
 
-confirm_reset = st.sidebar.checkbox("⚠️ Déverrouiller le bouton")
-if confirm_reset and st.sidebar.button("🔴 SUPPRIMER TOUT DU SERVEUR", use_container_width=True):
+if st.sidebar.checkbox("⚠️ Déverrouiller le bouton") and st.sidebar.button("🔴 SUPPRIMER TOUT DU SERVEUR", use_container_width=True):
     st.session_state.historique = []
     sauvegarder_permanence_cloud([])
     st.rerun()
 
 # --- CLAVIER DE SAISIE ---
-st.subheader("📥 Enregistrer un numéro sorti au Casino")
+st.subheader("📥 Enregistrer un numéro")
 cols_clavier = st.columns(13)
 with cols_clavier[0]:
     if st.button("🟢 0", use_container_width=True):
@@ -199,12 +189,10 @@ with cols_clavier[0]:
 for n in range(1, 37):
     col_idx = ((n - 1) % 12) + 1
     rouges = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
-    label = f"🔴 {n}" if n in rouges else f"⚫ {n}"
-    with cols_clavier[col_idx]:
-        if st.button(label, use_container_width=True):
-            st.session_state.historique.append(n)
-            sauvegarder_permanence_cloud(st.session_state.historique)
-            st.rerun()
+    if st.button(f"🔴 {n}" if n in rouges else f"⚫ {n}", use_container_width=True, key=f"btn_{n}"):
+        st.session_state.historique.append(n)
+        sauvegarder_permanence_cloud(st.session_state.historique)
+        st.rerun()
 
 # --- INSTANCIATION DE L'ARMÉE ---
 armee_locale = {"RN": [], "PI": [], "PM": []}
@@ -219,7 +207,6 @@ capital_calcule = 0.0
 total_boules_global = len(st.session_state.historique)
 coup_absolu_epure = 0
 
-# Moulinette de reconstruction
 for num in st.session_state.historique:
     rn, pi, pm = analyser_numero(num)
     est_zero = (num == 0)
@@ -245,6 +232,7 @@ for num in st.session_state.historique:
 st.session_state.capital_reel = capital_calcule
 prochain_coup_absolu = coup_absolu_epure + 1
 position_dans_carton = ((prochain_coup_absolu - 1) % 24) + 1
+type_coup_prochain_global = determiner_type_coup_global(prochain_coup_absolu)
 
 votes = {"RN": {"R": 0, "N": 0}, "PI": {"R": 0, "N": 0}, "PM": {"R": 0, "N": 0}}
 for chance in ["RN", "PI", "PM"]:
@@ -263,6 +251,8 @@ capital_placeholder.markdown(
     * Boules épurées : **{coup_absolu_epure}**
     * ---
     * Position Carton : **{position_dans_carton} / 24**
+    * ---
+    * Type Coup Suivant : **Coup {type_coup_prochain_global}**
     * ---
     * Groupes en Retard (Solde < 0) :
       * R/N : **{qualifies_rn}/24**
@@ -305,7 +295,6 @@ with st.expander("🔍 INSPECTEUR CHIRURGICAL DES COMPTES (Vérification du Sold
         intention_brute = j.intention(prochain_coup_absolu)
         intention_visuelle = lbl_a if intention_brute == "R" else (lbl_b if intention_brute == "N" else "🚫 Saut")
 
-        type_c_prochain = j.determiner_type_coup(prochain_coup_absolu)
         solde_texte = f"+{j.solde_global}" if j.solde_global > 0 else str(j.solde_global)
 
         donnees_audit.append({
@@ -315,14 +304,7 @@ with st.expander("🔍 INSPECTEUR CHIRURGICAL DES COMPTES (Vérification du Sold
             "EN RETARD": f"✅ OUI" if j.retard_constate else "❌ NON",
             "SOLDE GLOBAL": solde_texte,
             "Survenues ce Carton": f"{j.survenues_carton_actuel} / 8 max",
-            "Type Coup Prochain": f"Coup {type_c_prochain} (Lettre {((prochain_coup_absolu - 1) % 3)+1})",
+            "Type Coup Prochain": f"Coup {type_coup_prochain_global} (Lettre {((prochain_coup_absolu - 1) % 3)+1})",
             "Action Prochaine": intention_visuelle
         })
     st.dataframe(pd.DataFrame(donnees_audit), use_container_width=True, hide_index=True)
-
-st.write("---")
-st.subheader(f"📇 Permanence enregistrée ({total_boules_global} boules)")
-if st.session_state.historique:
-    if len(st.session_state.historique) > 150:
-        st.info(f"... [Permanence] ... , " + ", ".join([str(x) for x in st.session_state.historique[-150:]]))
-    else: st.info(", ".join([str(x) for x in st.session_state.historique]))
